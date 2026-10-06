@@ -1,7 +1,7 @@
 # Эмулятор командной оболочки (вариант 14)
 
 Практическая работа № 1 по дисциплине «Конфигурационное управление» (РТУ МИРЭА, ИКБО-10-25).
-Готовы этап 1 (REPL) и этап 2 (конфигурация). Дальше: этап 3 — VFS, этапы 4–5 — команды.
+Готовы этап 1 (REPL), этап 2 (конфигурация) и этап 3 (VFS). Дальше: этапы 4–5 — команды.
 
 ## 1. Общее описание
 
@@ -15,13 +15,14 @@
 - Команды `ls` и `cd` — заглушки, они печатают своё имя и аргументы. Команда `exit` завершает работу.
   Неизвестная команда даёт сообщение `command not found`.
 - Параметры запуска `--vfs`, `--script`, `--config` и конфигурационный файл YAML. Значения из файла важнее,
-  чем значения из командной строки.
+  чем значения из командной строки. При запуске печатаются все параметры (отладочный вывод).
 - Стартовый скрипт: команды из файла выполняются по порядку, на экране видны и ввод, и вывод (как диалог).
   Поддерживаются комментарии `#`.
-- При запуске печатаются все заданные параметры (отладочный вывод). Об ошибках (нет конфига, неверный YAML,
-  нет скрипта) программа сообщает и завершается.
+- Виртуальная файловая система (VFS) загружается из XML-файла и целиком хранится в памяти. Служебная команда
+  `vfs-info` показывает загруженную VFS. Об ошибках загрузки (нет файла, неверный формат) программа сообщает.
 
-VFS пока не загружается (это этап 3): путь `--vfs` только запоминается и показывается в отладочном выводе.
+Эмулятор читает только файлы, которые ему указали (конфиг, скрипт, XML-файл VFS), и ничего не записывает на диск.
+Содержимое VFS не распаковывается и не изменяется: всё хранится в памяти.
 
 ## 2. Описание функций и настроек
 
@@ -29,7 +30,7 @@ VFS пока не загружается (это этап 3): путь `--vfs` �
 
 | Параметр | Что задаёт |
 |---|---|
-| `--vfs ПУТЬ` | Путь к физическому расположению VFS |
+| `--vfs ПУТЬ` | Путь к XML-файлу с VFS |
 | `--script ПУТЬ` | Путь к стартовому скрипту |
 | `--config ПУТЬ` | Путь к конфигурационному файлу YAML |
 | `-h`, `--help` | Справка |
@@ -49,6 +50,34 @@ script: examples/start_b.txt
 значения нет, берётся значение из командной строки. Значения должны быть строками. Пути Windows пишите без
 кавычек или с прямыми слэшами (`D:/data/vfs.xml`).
 
+### VFS (XML-файл)
+
+Корневой элемент `<vfs name="имя">` — это корневая папка. Внутри него и внутри папок можно писать:
+
+- `<dir name="имя">` — папка (внутри другие `dir` и `file`);
+- `<file name="имя">текст</file>` — файл; текст хранится в UTF-8;
+- `<file name="имя" encoding="base64">...</file>` — файл с двоичными данными в base64.
+
+```xml
+<vfs name="sample">
+  <dir name="home">
+    <dir name="user">
+      <file name="notes.txt">hello</file>
+      <file name="data.bin" encoding="base64">AAECAwQ=</file>
+    </dir>
+  </dir>
+  <file name="readme.txt">sample VFS</file>
+</vfs>
+```
+
+Правила: у каждой папки и файла есть имя без `/` (не `.` и не `..`), имена в одной папке не повторяются, других
+элементов быть не должно. Файл загружается целиком в память в виде вложенных словарей (папка — словарь, файл —
+байты). Имя `<vfs>` по умолчанию `vfs`.
+
+Примеры в `examples/vfs/`: `minimal.xml` (только корень), `files.xml` (несколько файлов в одной папке),
+`sample.xml` (три уровня папок, текстовые и двоичный файлы), а также сломанные `bad_syntax.xml` (не XML) и
+`bad_format.xml` (неверная структура).
+
 ### Стартовый скрипт
 
 Текстовый файл, по одной команде в строке.
@@ -58,12 +87,17 @@ script: examples/start_b.txt
 - Пустые строки пропускаются. Ошибочная команда выдаёт сообщение, скрипт продолжается.
 - Если скрипт закончился без `exit`, программа остаётся в интерактивном режиме.
 
+Скрипт `examples/all_commands.txt` проверяет все команды этапов 1–3, включая `vfs-info`, комментарии и ошибку.
+
 ### Ошибки
 
 | Ситуация | Сообщение | Код завершения |
 |---|---|---|
 | Конфиг не найден, не читается или неверный YAML | `Config error: cannot read ...` | 1 |
 | В конфиге не пары «ключ: значение» или значение не строка | `Config error: ...` | 1 |
+| Файл VFS не найден или не читается | `VFS error: cannot read ...` | 1 |
+| Файл VFS не является XML | `VFS error: invalid XML in ...` | 1 |
+| Неверный формат VFS (не тот элемент, нет имени, повтор, плохой base64) | `VFS error: invalid format in ...` | 1 |
 | Скрипт не найден или не читается | `Script error: cannot read ...` | 1 |
 | Неизвестный параметр командной строки | `usage: ...` и описание ошибки | 2 |
 
@@ -74,6 +108,7 @@ script: examples/start_b.txt
 | `ls [аргументы]` | Заглушка: печатает `command: ls, arguments: [...]` |
 | `cd [аргументы]` | Заглушка: печатает `command: cd, arguments: [...]` |
 | `exit` | Завершает работу эмулятора |
+| `vfs-info` | Служебная команда: имя VFS, число папок и файлов, дерево с размерами. Без VFS сообщает, что её нет |
 
 `Ctrl+D` (в Windows `Ctrl+Z`, затем `Enter`) завершает работу, `Ctrl+C` сбрасывает текущую строку.
 
@@ -86,14 +121,22 @@ script: examples/start_b.txt
 | `read_config(path)` | Читает YAML-конфиг, проверяет его; при ошибке сообщает и завершает работу |
 | `merge_settings(args, file_data)` | Объединяет настройки: значения из файла важнее командной строки |
 | `print_debug(args, file_data, settings)` | Отладочный вывод всех параметров |
+| `fail(path, message)` | Сообщает о неверном формате VFS и завершает работу |
+| `read_xml_root(path)` | Читает XML-файл и возвращает корневой элемент; сообщает, если файла нет или это не XML |
+| `check_name(name, tag, path)` | Проверяет имя папки или файла в описании VFS |
+| `read_file(item, path)` | Содержимое файла VFS в байтах (текст UTF-8 или base64) |
+| `read_dir(element, path)` | Читает содержимое папки (рекурсивно): словарь «имя → папка или байты» |
+| `load_vfs(path)` | Загружает VFS из XML-файла в память: `{"name": ..., "root": ...}` |
+| `count_nodes(directory)` | Считает папки и файлы во всём дереве |
+| `tree_lines(directory, indent)` | Строки дерева VFS для команды `vfs-info` |
+| `vfs_summary(vfs)` | Краткое описание: имя, число папок и файлов |
 | `parse_line(line)` | Делит строку на команду и аргументы, отбрасывает комментарий |
 | `print_stub(name, args)` | Печатает имя команды-заглушки и аргументы |
-| `cmd_ls(args)`, `cmd_cd(args)` | Заглушки команд `ls` и `cd` |
-| `cmd_exit(_args)` | Команда `exit` |
-| `run_line(line)` | Разбирает строку и выполняет команду |
-| `run_script(path, prompt)` | Выполняет скрипт, показывая ввод и вывод как диалог |
-| `run_repl(prompt)` | Интерактивный цикл: приглашение, ввод, выполнение |
-| `main()` | Точка входа: параметры, отладочный вывод, скрипт, затем интерактивный режим |
+| `cmd_ls`, `cmd_cd`, `cmd_exit`, `cmd_vfs_info` | Команды `ls`, `cd`, `exit` и `vfs-info` |
+| `run_line(line, vfs)` | Разбирает строку и выполняет команду |
+| `run_script(path, prompt, vfs)` | Выполняет скрипт, показывая ввод и вывод как диалог |
+| `run_repl(prompt, vfs)` | Интерактивный цикл: приглашение, ввод, выполнение |
+| `main()` | Точка входа: параметры, VFS, скрипт, затем интерактивный режим |
 
 ## 3. Сборка, запуск и тесты
 
@@ -107,7 +150,7 @@ pip install -r requirements.txt
 
 ```
 .\run.bat
-.\run.bat --script examples/start_a.txt
+.\run.bat --vfs examples/vfs/sample.xml --script examples/all_commands.txt
 ```
 
 Запуск на Linux/macOS: `sh run.sh [параметры]`. Или напрямую: `python src/emulator.py [параметры]`.
@@ -118,69 +161,94 @@ pip install -r requirements.txt
 python -m unittest -v
 ```
 
-Скрипты для проверки параметров запускают эмулятор несколько раз; в каждом есть вызовы со всеми параметрами
-(`--vfs`, `--script`, `--config`, `--help`). В конце скрипты ждут нажатия клавиши.
+Скрипты для проверки запускают эмулятор несколько раз. В конце они ждут нажатия клавиши. Скрипты этапа 2 вызывают
+эмулятор со всеми параметрами (`--vfs`, `--script`, `--config`, `--help`), скрипты этапа 3 в каждом случае
+проверяют три вида VFS: минимальную, с несколькими файлами и с несколькими уровнями вложенности.
 
 | Скрипт (папка `scripts/`) | Что проверяет |
 |---|---|
 | `test_params.bat` | Каждый параметр отдельно и все вместе |
 | `test_priority.bat` | Приоритет значений из конфига над командной строкой |
 | `test_errors.bat` | Ошибки: нет конфига, неверный YAML, нет скрипта, неизвестный параметр |
+| `test_vfs.bat` | Загрузка трёх видов VFS (и из конфига), команда `vfs-info` |
+| `test_all_commands.bat` | Скрипт со всеми командами этапов 1–3 на трёх видах VFS и без VFS |
+| `test_vfs_errors.bat` | Ошибки VFS: нет файла, не XML, неверный формат; затем три корректные VFS |
 
 ```
 .\scripts\test_params.bat
-.\scripts\test_priority.bat
-.\scripts\test_errors.bat
+.\scripts\test_vfs.bat
+.\scripts\test_all_commands.bat
 ```
 
 ## 4. Примеры использования
 
-Запуск без параметров (пользователь `alice`, компьютер `workstation`):
+Скрипт со всеми командами и VFS (`.\run.bat --vfs examples/vfs/sample.xml --script examples/all_commands.txt`),
+пользователь `alice`, компьютер `workstation`:
 
 ```
 === Virtual machine: shell emulator ===
-[debug] command line: vfs=None, script=None, config=None
+[debug] command line: vfs=examples/vfs/sample.xml, script=examples/all_commands.txt, config=None
 [debug] config file : {}
-[debug] used values : vfs=None, script=None
-alice@workstation:~$ ls -l /tmp
-command: ls, arguments: ['-l', '/tmp']
-alice@workstation:~$ foo
-foo: command not found
-alice@workstation:~$ exit
-```
-
-Стартовый скрипт с комментариями и ошибкой (`.\run.bat --script examples/start_a.txt`):
-
-```
-=== Virtual machine: shell emulator ===
-[debug] command line: vfs=None, script=examples/start_a.txt, config=None
-[debug] config file : {}
-[debug] used values : vfs=None, script=examples/start_a.txt
-alice@workstation:~$ # Start script A: dialog, comments and error handling
+[debug] used values : vfs=examples/vfs/sample.xml, script=examples/all_commands.txt
+VFS loaded: sample (folders: 3, files: 4)
+alice@workstation:~$ # Start script that tests all commands of stages 1-3 (use it with --vfs)
+alice@workstation:~$ # Stage 1: ls and cd are stubs, they print their name and arguments
 alice@workstation:~$ ls
 command: ls, arguments: []
-alice@workstation:~$ ls -l /tmp   # a comment after a command is ignored
-command: ls, arguments: ['-l', '/tmp']
-alice@workstation:~$ # an unknown command is reported, the script goes on
-alice@workstation:~$ foo bar
-foo: command not found
+alice@workstation:~$ ls -l /home/user
+command: ls, arguments: ['-l', '/home/user']
 alice@workstation:~$ cd /home/user
 command: cd, arguments: ['/home/user']
+alice@workstation:~$ cd
+command: cd, arguments: []
+alice@workstation:~$ # Stage 2: comments work on their own line and after a command
+alice@workstation:~$ ls docs   # this part is ignored
+command: ls, arguments: ['docs']
+alice@workstation:~$ # An unknown command is an error, the script goes on
+alice@workstation:~$ foo bar
+foo: command not found
+alice@workstation:~$ # Stage 3: the service command vfs-info works with the loaded VFS
+alice@workstation:~$ vfs-info
+VFS: sample (folders: 3, files: 4)
+/
+  home/
+    user/
+      data.bin (5 bytes)
+      docs/
+        todo.txt (16 bytes)
+      notes.txt (5 bytes)
+  readme.txt (10 bytes)
+alice@workstation:~$ # exit ends the work
 alice@workstation:~$ exit
 ```
 
-Приоритет конфига. В командной строке указаны `minimal.xml` и `start_a.txt`, а в конфиге другие значения,
-поэтому берутся значения из файла и выполняется `start_b.txt`:
+Ошибка формата VFS (`.\run.bat --vfs examples/vfs/bad_format.xml`), код завершения 1:
 
 ```
-.\run.bat --vfs examples/vfs/minimal.xml --script examples/start_a.txt --config examples/config_full.yaml
+=== Virtual machine: shell emulator ===
+[debug] command line: vfs=examples/vfs/bad_format.xml, script=None, config=None
+[debug] config file : {}
+[debug] used values : vfs=examples/vfs/bad_format.xml, script=None
+VFS error: invalid format in 'examples/vfs/bad_format.xml': unknown element <folder>
 ```
+
+Другие ошибки VFS (код завершения 1):
+
+```
+VFS error: invalid XML in 'examples/vfs/bad_syntax.xml': mismatched tag: line 5, column 2
+VFS error: cannot read 'examples/vfs/missing.xml': [Errno 2] No such file or directory: 'examples/vfs/missing.xml'
+```
+
+Приоритет конфига. В командной строке указаны `minimal.xml` и `start_a.txt`, а в конфиге другие значения, поэтому
+загружается `sample.xml` и выполняется `start_b.txt`
+(`.\run.bat --vfs examples/vfs/minimal.xml --script examples/start_a.txt --config examples/config_full.yaml`):
 
 ```
 === Virtual machine: shell emulator ===
 [debug] command line: vfs=examples/vfs/minimal.xml, script=examples/start_a.txt, config=examples/config_full.yaml
 [debug] config file : {'vfs': 'examples/vfs/sample.xml', 'script': 'examples/start_b.txt'}
 [debug] used values : vfs=examples/vfs/sample.xml, script=examples/start_b.txt
+VFS loaded: sample (folders: 3, files: 4)
 alice@workstation:~$ # Start script B: an alternative script
 alice@workstation:~$ cd /
 command: cd, arguments: ['/']
@@ -204,8 +272,8 @@ expected ',' or ']', but got ':'
 ```
 src/emulator.py       программа
 tests/                тесты (unittest)
-scripts/              скрипты Windows для проверки параметров
-examples/             примеры: стартовые скрипты, конфиги YAML, файлы VFS
+scripts/              скрипты Windows для проверки параметров и VFS
+examples/             примеры: стартовые скрипты, конфиги YAML, XML-файлы VFS (папка vfs/)
 requirements.txt      зависимости (PyYAML)
 run.bat, run.sh       запуск (Windows / Linux, macOS)
 ```

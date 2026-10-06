@@ -1,0 +1,3 @@
+# Shows the loaded VFS with the service command vfs-info
+vfs-info
+exit

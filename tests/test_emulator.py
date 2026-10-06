@@ -1,4 +1,4 @@
-"""Тесты эмулятора: парсер, команды, конфиг, скрипт и запуск программы."""
+"""Тесты эмулятора: парсер, команды, конфиг, скрипт, VFS и запуск."""
 
 import contextlib
 import io
@@ -15,6 +15,8 @@ from src import emulator
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PROGRAM = ROOT / "src" / "emulator.py"
 PROMPT = "$ "
+MINIMAL = "examples/vfs/minimal.xml"
+SAMPLE = "examples/vfs/sample.xml"
 
 
 def make_file(folder, name, text):
@@ -51,6 +53,20 @@ def start_program(args, text=""):
         timeout=60, check=False)
 
 
+def vfs_from_text(body):
+    """Загружает VFS из XML-текста, записанного во временный файл."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = make_file(folder, "vfs.xml", body)
+        return emulator.load_vfs(path)
+
+
+def vfs_error(body):
+    """Возвращает сообщение об ошибке при загрузке VFS из XML-текста."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = make_file(folder, "vfs.xml", body)
+        return exit_message(emulator.load_vfs, path)
+
+
 class PromptAndParserTests(unittest.TestCase):
     """Приглашение к вводу и разбор строки."""
 
@@ -84,28 +100,28 @@ class CommandTests(unittest.TestCase):
 
     def test_ls_stub(self):
         """Заглушка ls печатает своё имя и аргументы."""
-        out = printed(emulator.run_line, "ls -l /tmp")
+        out = printed(emulator.run_line, "ls -l /tmp", None)
         self.assertEqual(out, "command: ls, arguments: ['-l', '/tmp']\n")
 
     def test_cd_stub(self):
         """Заглушка cd печатает своё имя и аргументы."""
-        out = printed(emulator.run_line, "cd /home")
+        out = printed(emulator.run_line, "cd /home", None)
         self.assertEqual(out, "command: cd, arguments: ['/home']\n")
 
     def test_unknown_command(self):
         """Неизвестная команда даёт сообщение об ошибке."""
-        out = printed(emulator.run_line, "foo bar")
+        out = printed(emulator.run_line, "foo bar", None)
         self.assertEqual(out, "foo: command not found\n")
 
     def test_exit(self):
         """Команда exit завершает работу эмулятора."""
         with self.assertRaises(SystemExit):
-            emulator.run_line("exit")
+            emulator.run_line("exit", None)
 
     def test_empty_line_does_nothing(self):
         """Пустая строка и комментарий ничего не печатают."""
-        self.assertEqual(printed(emulator.run_line, ""), "")
-        self.assertEqual(printed(emulator.run_line, "# note"), "")
+        self.assertEqual(printed(emulator.run_line, "", None), "")
+        self.assertEqual(printed(emulator.run_line, "# note", None), "")
 
 
 class ConfigTests(unittest.TestCase):
@@ -184,17 +200,152 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("used values : vfs=a.xml, script=None", out)
 
 
+class VfsLoadTests(unittest.TestCase):
+    """Загрузка VFS из XML-файла."""
+
+    def test_minimal_vfs(self):
+        """Минимальная VFS: только корень, без папок и файлов."""
+        vfs = emulator.load_vfs(MINIMAL)
+        self.assertEqual(vfs, {"name": "minimal", "root": {}})
+
+    def test_several_files(self):
+        """Несколько файлов в корне: текст и base64."""
+        vfs = emulator.load_vfs("examples/vfs/files.xml")
+        root = vfs["root"]
+        self.assertEqual(sorted(root), ["data.bin", "empty.txt",
+                                        "hello.txt", "readme.txt"])
+        self.assertEqual(root["hello.txt"], b"hello world")
+        self.assertEqual(root["data.bin"], bytes([0, 1, 2, 3]))
+        self.assertEqual(root["empty.txt"], b"")
+
+    def test_three_levels(self):
+        """Вложенные папки: файл на глубине home/user/docs."""
+        root = emulator.load_vfs(SAMPLE)["root"]
+        self.assertEqual(root["home"]["user"]["docs"]["todo.txt"],
+                         b"write the report")
+        self.assertEqual(root["home"]["user"]["data.bin"],
+                         bytes([0, 1, 2, 3, 4]))
+
+    def test_unicode_text_and_default_name(self):
+        """Русский текст читается правильно, имя по умолчанию — vfs."""
+        vfs = vfs_from_text('<vfs><file name="a.txt">привет</file></vfs>')
+        self.assertEqual(vfs["name"], "vfs")
+        self.assertEqual(vfs["root"]["a.txt"], "привет".encode("utf-8"))
+
+    def test_base64_with_line_breaks(self):
+        """Данные base64 можно переносить на несколько строк."""
+        body = ('<vfs><file name="b" encoding="base64">'
+                'AAEC\n  Aw==</file></vfs>')
+        root = vfs_from_text(body)["root"]
+        self.assertEqual(root["b"], bytes([0, 1, 2, 3]))
+
+    def test_loading_does_not_write_to_disk(self):
+        """Загрузка VFS ничего не создаёт и не меняет на диске."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_file(folder, "vfs.xml", pathlib.Path(SAMPLE).read_text(
+                encoding="utf-8"))
+            before = (sorted(os.listdir(folder)), os.path.getmtime(path))
+            emulator.load_vfs(path)
+            after = (sorted(os.listdir(folder)), os.path.getmtime(path))
+        self.assertEqual(before, after)
+
+    def test_missing_file(self):
+        """Нет файла VFS — сообщение об ошибке."""
+        message = exit_message(emulator.load_vfs, "no/such.xml")
+        self.assertIn("VFS error: cannot read 'no/such.xml'", message)
+
+    def test_directory_instead_of_file(self):
+        """Папка вместо файла — сообщение об ошибке."""
+        with tempfile.TemporaryDirectory() as folder:
+            message = exit_message(emulator.load_vfs, folder)
+        self.assertIn("VFS error: cannot read", message)
+
+    def test_not_xml(self):
+        """Файл не является XML — сообщение об ошибке."""
+        message = vfs_error("this is not xml")
+        self.assertIn("VFS error: invalid XML", message)
+
+    def test_unclosed_tag(self):
+        """Незакрытый тег — ошибка XML с номером строки."""
+        message = vfs_error('<vfs><dir name="a"></vfs>')
+        self.assertIn("invalid XML", message)
+        self.assertIn("line 1", message)
+
+    def test_wrong_root(self):
+        """Корень не <vfs> — ошибка формата."""
+        message = vfs_error("<files/>")
+        self.assertIn("invalid format", message)
+        self.assertIn("root element must be <vfs>", message)
+
+    def test_unknown_element(self):
+        """Неизвестный элемент внутри VFS — ошибка формата."""
+        message = vfs_error('<vfs><folder name="a"/></vfs>')
+        self.assertIn("unknown element <folder>", message)
+
+    def test_missing_name(self):
+        """У папки или файла нет имени — ошибка формата."""
+        self.assertIn("needs a name", vfs_error("<vfs><dir/></vfs>"))
+
+    def test_bad_names(self):
+        """Имя со слэшем, точка и две точки недопустимы."""
+        for name in ("a/b", ".", ".."):
+            message = vfs_error(f'<vfs><file name="{name}"/></vfs>')
+            self.assertIn("needs a name", message, name)
+
+    def test_duplicate_names(self):
+        """Два элемента с одним именем в папке — ошибка формата."""
+        body = '<vfs><file name="a"/><dir name="a"/></vfs>'
+        self.assertIn("duplicate name 'a'", vfs_error(body))
+
+    def test_invalid_base64(self):
+        """Неверные данные base64 — ошибка формата."""
+        body = '<vfs><file name="b" encoding="base64">%%%</file></vfs>'
+        self.assertIn("invalid base64", vfs_error(body))
+
+    def test_unknown_encoding(self):
+        """Неизвестная кодировка файла — ошибка формата."""
+        body = '<vfs><file name="b" encoding="hex">00</file></vfs>'
+        self.assertIn("unknown encoding 'hex'", vfs_error(body))
+
+
+class VfsCommandTests(unittest.TestCase):
+    """Служебная команда vfs-info и описание дерева."""
+
+    def test_count_nodes(self):
+        """Считаются папки и файлы по всему дереву."""
+        root = emulator.load_vfs(SAMPLE)["root"]
+        self.assertEqual(emulator.count_nodes(root), (3, 4))
+
+    def test_tree_lines(self):
+        """Дерево: папки со знаком /, у файлов размер, отступы по уровням."""
+        root = {"a": {"b.txt": b"12"}, "c": b""}
+        self.assertEqual(emulator.tree_lines(root),
+                         ["a/", "  b.txt (2 bytes)", "c (0 bytes)"])
+
+    def test_vfs_info_with_vfs(self):
+        """vfs-info показывает имя, число папок и файлов и дерево."""
+        vfs = emulator.load_vfs(SAMPLE)
+        out = printed(emulator.run_line, "vfs-info", vfs)
+        self.assertIn("VFS: sample (folders: 3, files: 4)", out)
+        self.assertIn("      docs/\n        todo.txt (16 bytes)\n", out)
+
+    def test_vfs_info_without_vfs(self):
+        """Без VFS команда vfs-info сообщает, что VFS не загружена."""
+        out = printed(emulator.run_line, "vfs-info", None)
+        self.assertIn("no VFS loaded", out)
+
+
 class ScriptTests(unittest.TestCase):
     """Выполнение стартового скрипта."""
 
-    def run_text(self, text):
+    def run_text(self, text, vfs=None):
         """Выполняет скрипт с текстом text и возвращает его вывод."""
         out = io.StringIO()
         with tempfile.TemporaryDirectory() as folder:
             path = make_file(folder, "start.txt", text)
             with contextlib.redirect_stdout(out):
                 with contextlib.suppress(SystemExit):
-                    emulator.run_script(path, PROMPT)
+                    emulator.run_script(path, PROMPT, vfs)
         return out.getvalue()
 
     def test_input_and_output_are_shown(self):
@@ -223,9 +374,15 @@ class ScriptTests(unittest.TestCase):
         out = self.run_text("exit\nls\n")
         self.assertEqual(out, "$ exit\n")
 
+    def test_script_works_with_vfs(self):
+        """Команда vfs-info в скрипте использует загруженную VFS."""
+        out = self.run_text("vfs-info\n", emulator.load_vfs(MINIMAL))
+        self.assertIn("VFS: minimal (folders: 0, files: 0)", out)
+
     def test_missing_script(self):
         """Нет файла скрипта — сообщение об ошибке."""
-        message = exit_message(emulator.run_script, "no/such.txt", PROMPT)
+        message = exit_message(emulator.run_script, "no/such.txt", PROMPT,
+                               None)
         self.assertIn("Script error: cannot read 'no/such.txt'", message)
 
 
@@ -235,7 +392,7 @@ class ReplTests(unittest.TestCase):
     def run_input(self, lines):
         """Запускает REPL на заданных строках и возвращает вывод."""
         with mock.patch("builtins.input", side_effect=lines):
-            return printed(emulator.run_repl, PROMPT)
+            return printed(emulator.run_repl, PROMPT, None)
 
     def test_session(self):
         """Команды выполняются, пустые строки пропускаются."""
@@ -261,13 +418,14 @@ class ProgramTests(unittest.TestCase):
         self.assertTrue(result.stdout.endswith("exit\n"))
 
     def test_config_beats_command_line(self):
-        """Конфиг важнее командной строки, скрипт из конфига выполняется."""
-        result = start_program(["--vfs", "cli.xml", "--script",
+        """Конфиг важнее командной строки: берутся его VFS и скрипт."""
+        result = start_program(["--vfs", MINIMAL, "--script",
                                 "examples/start_a.txt", "--config",
                                 "examples/config_full.yaml"])
         self.assertEqual(result.returncode, 0)
         self.assertIn("used values : vfs=examples/vfs/sample.xml, "
                       "script=examples/start_b.txt", result.stdout)
+        self.assertIn("VFS loaded: sample", result.stdout)
         self.assertIn("# Start script B", result.stdout)
         self.assertNotIn("# Start script A", result.stdout)
 
@@ -277,6 +435,35 @@ class ProgramTests(unittest.TestCase):
         self.assertIn("# Start script A", result.stdout)
         self.assertIn("command: ls, arguments: ['-l', '/tmp']", result.stdout)
         self.assertIn("foo: command not found", result.stdout)
+
+    def test_vfs_is_loaded_and_shown(self):
+        """С параметром --vfs VFS загружается и видна по vfs-info."""
+        result = start_program(["--vfs", SAMPLE], "vfs-info\nexit\n")
+        self.assertIn("VFS loaded: sample (folders: 3, files: 4)",
+                      result.stdout)
+        self.assertIn("notes.txt (5 bytes)", result.stdout)
+
+    def test_all_commands_script_with_and_without_vfs(self):
+        """Скрипт со всеми командами работает с VFS и без неё."""
+        script = "examples/all_commands.txt"
+        with_vfs = start_program(["--vfs", SAMPLE, "--script", script])
+        without = start_program(["--script", script])
+        self.assertEqual(with_vfs.returncode, 0)
+        self.assertEqual(without.returncode, 0)
+        self.assertIn("todo.txt (16 bytes)", with_vfs.stdout)
+        self.assertIn("no VFS loaded", without.stdout)
+        self.assertIn("foo: command not found", with_vfs.stdout)
+
+    def test_vfs_errors_stop_program(self):
+        """Ошибки VFS: сообщение и код завершения 1."""
+        cases = (("examples/vfs/missing.xml", "cannot read"),
+                 ("examples/vfs/bad_syntax.xml", "invalid XML"),
+                 ("examples/vfs/bad_format.xml", "invalid format"))
+        for path, text in cases:
+            result = start_program(["--vfs", path])
+            self.assertEqual(result.returncode, 1, path)
+            self.assertIn("VFS error", result.stderr)
+            self.assertIn(text, result.stderr)
 
     def test_bad_config_stops_program(self):
         """Ошибка в конфиге: сообщение и код завершения 1."""

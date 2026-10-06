@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <vfs name="sample">
-  <dir name="/">
-    <dir name="home">
-      <dir name="user">
-        <file name="notes.txt">hello</file>
+  <dir name="home">
+    <dir name="user">
+      <file name="notes.txt">hello</file>
+      <file name="data.bin" encoding="base64">AAECAwQ=</file>
+      <dir name="docs">
+        <file name="todo.txt">write the report</file>
       </dir>
     </dir>
-    <file name="readme.txt">sample VFS</file>
   </dir>
+  <file name="readme.txt">sample VFS</file>
 </vfs>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vfs name="files">
+  <file name="hello.txt">hello world</file>
+  <file name="readme.txt">several files in one folder</file>
+  <file name="data.bin" encoding="base64">AAECAw==</file>
+  <file name="empty.txt"/>
+</vfs>

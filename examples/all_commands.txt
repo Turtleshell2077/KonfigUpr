@@ -1,0 +1,19 @@
+# Start script that tests all commands of stages 1-3 (use it with --vfs)
+
+# Stage 1: ls and cd are stubs, they print their name and arguments
+ls
+ls -l /home/user
+cd /home/user
+cd
+
+# Stage 2: comments work on their own line and after a command
+ls docs   # this part is ignored
+
+# An unknown command is an error, the script goes on
+foo bar
+
+# Stage 3: the service command vfs-info works with the loaded VFS
+vfs-info
+
+# exit ends the work
+exit
