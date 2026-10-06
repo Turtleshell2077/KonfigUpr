@@ -1,0 +1,3 @@
+# Both settings: they override the command line
+vfs: examples/vfs/sample.xml
+script: examples/start_b.txt

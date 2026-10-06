@@ -1,4 +1,4 @@
-"""Тесты этапа 1: приглашение, парсер, команды и цикл REPL."""
+"""Тесты эмулятора: парсер, команды, конфиг, скрипт и запуск программы."""
 
 import contextlib
 import io
@@ -6,275 +6,295 @@ import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 from src import emulator
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-CUSTOM_EXIT_CODE = 3
-WRAPPED_EXIT_CODE = 255
-PROCESS_TIMEOUT = 30
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+PROGRAM = ROOT / "src" / "emulator.py"
+PROMPT = "$ "
 
 
-def capture(func, *args):
-    """Вызывает func(*args) и возвращает пару (stdout, stderr)."""
+def make_file(folder, name, text):
+    """Создаёт в папке файл с текстом и возвращает путь к нему."""
+    path = pathlib.Path(folder) / name
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def printed(func, *args):
+    """Вызывает func(*args) и возвращает всё, что она напечатала."""
     out = io.StringIO()
-    err = io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    with contextlib.redirect_stdout(out):
         func(*args)
-    return out.getvalue(), err.getvalue()
+    return out.getvalue()
 
 
-def run_session(lines):
-    """Запускает REPL на заданных строках ввода.
-
-    Возвращает stdout, stderr и подменённую функцию input. Выход по
-    команде exit (SystemExit) гасится, чтобы можно было проверить вывод.
-    """
-    out = io.StringIO()
-    err = io.StringIO()
-    with mock.patch("builtins.input", side_effect=lines) as fake_input:
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            with contextlib.suppress(SystemExit):
-                emulator.run_repl("$ ")
-    return out.getvalue(), err.getvalue(), fake_input
+def exit_message(func, *args):
+    """Вызывает func(*args), которая должна завершить работу с сообщением."""
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            func(*args)
+        except SystemExit as error:
+            return str(error.code)
+    return ""
 
 
-class ParseLineTests(unittest.TestCase):
-    """Проверки разбиения строки на команду и аргументы."""
-
-    def test_command_with_arguments(self):
-        """Строка делится по пробелам на команду и аргументы."""
-        result = emulator.parse_line("ls -l /tmp")
-        self.assertEqual(result, ("ls", ["-l", "/tmp"]))
-
-    def test_command_without_arguments(self):
-        """Команда без аргументов даёт пустой список аргументов."""
-        self.assertEqual(emulator.parse_line("cd"), ("cd", []))
-
-    def test_repeated_spaces_and_tabs(self):
-        """Повторяющиеся пробелы и табуляции считаются одним разделителем."""
-        result = emulator.parse_line("  ls \t -a   dir  ")
-        self.assertEqual(result, ("ls", ["-a", "dir"]))
-
-    def test_empty_line(self):
-        """Пустая строка даёт пустую команду."""
-        self.assertEqual(emulator.parse_line(""), ("", []))
-
-    def test_whitespace_only_line(self):
-        """Строка из одних пробелов даёт пустую команду."""
-        self.assertEqual(emulator.parse_line("   \t "), ("", []))
-
-    def test_leading_bom_is_ignored(self):
-        """BOM в начале строки (например, из PowerShell) не мешает разбору."""
-        result = emulator.parse_line("﻿ls -l")
-        self.assertEqual(result, ("ls", ["-l"]))
-
-    def test_quotes_are_not_special(self):
-        """Кавычки на этом этапе не обрабатываются, разбор идёт по пробелам."""
-        result = emulator.parse_line('ls "a b"')
-        self.assertEqual(result, ("ls", ['"a', 'b"']))
+def start_program(args, text=""):
+    """Запускает src/emulator.py как отдельную программу."""
+    return subprocess.run(
+        [sys.executable, str(PROGRAM), *args],
+        input=text, capture_output=True, text=True, encoding="utf-8",
+        cwd=ROOT, env=dict(os.environ, PYTHONUTF8="1"),
+        timeout=60, check=False)
 
 
-class PromptTests(unittest.TestCase):
-    """Проверки формирования приглашения к вводу."""
+class PromptAndParserTests(unittest.TestCase):
+    """Приглашение к вводу и разбор строки."""
 
     def test_prompt_format(self):
         """Приглашение имеет вид username@hostname:~$ ."""
-        with mock.patch.object(emulator, "get_username", return_value="bob"):
-            with mock.patch.object(emulator, "get_hostname",
-                                   return_value="pc"):
-                self.assertEqual(emulator.build_prompt(), "bob@pc:~$ ")
+        with mock.patch("getpass.getuser", return_value="bob"):
+            with mock.patch("socket.gethostname", return_value="pc"):
+                self.assertEqual(emulator.get_prompt(), "bob@pc:~$ ")
 
-    def test_real_prompt_shape(self):
-        """Приглашение из реальных данных ОС содержит «@» и оканчивается ~$."""
-        prompt = emulator.build_prompt()
-        self.assertIn("@", prompt)
-        self.assertTrue(prompt.endswith(":~$ "))
+    def test_command_and_arguments(self):
+        """Строка делится по пробелам на команду и аргументы."""
+        result = emulator.parse_line("  ls   -l  /tmp ")
+        self.assertEqual(result, ("ls", ["-l", "/tmp"]))
 
-    def test_username_from_getpass(self):
-        """Имя пользователя берётся из getpass."""
-        with mock.patch("getpass.getuser", return_value="alice"):
-            self.assertEqual(emulator.get_username(), "alice")
+    def test_empty_line(self):
+        """Пустая строка не содержит команды."""
+        self.assertEqual(emulator.parse_line("   "), ("", []))
 
-    def test_username_fallback_on_errors(self):
-        """При ошибке определения имени используется значение по умолчанию."""
-        for error in (ImportError, KeyError, OSError):
-            with mock.patch("getpass.getuser", side_effect=error):
-                self.assertEqual(emulator.get_username(), "user")
+    def test_comment_line(self):
+        """Строка-комментарий не содержит команды."""
+        self.assertEqual(emulator.parse_line("# comment"), ("", []))
 
-    def test_username_fallback_on_empty(self):
-        """Пустое имя заменяется значением по умолчанию."""
-        with mock.patch("getpass.getuser", return_value=""):
-            self.assertEqual(emulator.get_username(), "user")
-
-    def test_hostname_is_short(self):
-        """Имя хоста обрезается до первой точки."""
-        with mock.patch("socket.gethostname", return_value="pc.example.org"):
-            self.assertEqual(emulator.get_hostname(), "pc")
-
-    def test_hostname_fallback_on_error(self):
-        """При ошибке определения хоста используется значение по умолчанию."""
-        with mock.patch("socket.gethostname", side_effect=OSError):
-            self.assertEqual(emulator.get_hostname(), "localhost")
-
-    def test_hostname_fallback_on_empty(self):
-        """Пустое имя хоста заменяется значением по умолчанию."""
-        with mock.patch("socket.gethostname", return_value=""):
-            self.assertEqual(emulator.get_hostname(), "localhost")
+    def test_comment_after_command(self):
+        """Комментарий после команды отбрасывается."""
+        result = emulator.parse_line("ls -l # list files")
+        self.assertEqual(result, ("ls", ["-l"]))
 
 
 class CommandTests(unittest.TestCase):
-    """Проверки команд ls, cd, exit и неизвестных команд."""
+    """Команды ls, cd, exit и неизвестная команда."""
 
-    def test_ls_stub_prints_name_and_args(self):
+    def test_ls_stub(self):
         """Заглушка ls печатает своё имя и аргументы."""
-        out, err = capture(emulator.execute, "ls", ["-l", "/tmp"])
+        out = printed(emulator.run_line, "ls -l /tmp")
         self.assertEqual(out, "command: ls, arguments: ['-l', '/tmp']\n")
-        self.assertEqual(err, "")
 
-    def test_cd_stub_prints_name_and_args(self):
+    def test_cd_stub(self):
         """Заглушка cd печатает своё имя и аргументы."""
-        out, err = capture(emulator.execute, "cd", ["/home"])
+        out = printed(emulator.run_line, "cd /home")
         self.assertEqual(out, "command: cd, arguments: ['/home']\n")
-        self.assertEqual(err, "")
-
-    def test_stub_without_arguments(self):
-        """Заглушка без аргументов печатает пустой список."""
-        out, _ = capture(emulator.execute, "ls", [])
-        self.assertEqual(out, "command: ls, arguments: []\n")
 
     def test_unknown_command(self):
-        """Неизвестная команда даёт сообщение об ошибке в stderr."""
-        out, err = capture(emulator.execute, "foo", ["bar"])
-        self.assertEqual(out, "")
-        self.assertEqual(err, "foo: command not found\n")
+        """Неизвестная команда даёт сообщение об ошибке."""
+        out = printed(emulator.run_line, "foo bar")
+        self.assertEqual(out, "foo: command not found\n")
 
-    def test_command_names_are_case_sensitive(self):
-        """Имена команд чувствительны к регистру, как в UNIX."""
-        _, err = capture(emulator.execute, "LS", [])
-        self.assertEqual(err, "LS: command not found\n")
+    def test_exit(self):
+        """Команда exit завершает работу эмулятора."""
+        with self.assertRaises(SystemExit):
+            emulator.run_line("exit")
 
-    def test_exit_without_arguments(self):
-        """Команда exit без аргументов завершает работу с кодом 0."""
-        with self.assertRaises(SystemExit) as context:
-            emulator.execute("exit", [])
-        self.assertEqual(context.exception.code, emulator.EXIT_OK)
+    def test_empty_line_does_nothing(self):
+        """Пустая строка и комментарий ничего не печатают."""
+        self.assertEqual(printed(emulator.run_line, ""), "")
+        self.assertEqual(printed(emulator.run_line, "# note"), "")
 
-    def test_exit_with_code(self):
-        """Команда exit принимает код возврата."""
-        with self.assertRaises(SystemExit) as context:
-            emulator.execute("exit", [str(CUSTOM_EXIT_CODE)])
-        self.assertEqual(context.exception.code, CUSTOM_EXIT_CODE)
 
-    def test_exit_negative_code_is_wrapped(self):
-        """Отрицательный код приводится к диапазону 0..255, как в bash."""
-        with self.assertRaises(SystemExit) as context:
-            emulator.execute("exit", ["-1"])
-        self.assertEqual(context.exception.code, WRAPPED_EXIT_CODE)
+class ConfigTests(unittest.TestCase):
+    """Чтение YAML-конфига и приоритет значений."""
 
-    def test_exit_non_numeric_argument(self):
-        """Нечисловой аргумент даёт ошибку и код 2."""
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            with self.assertRaises(SystemExit) as context:
-                emulator.execute("exit", ["abc"])
-        self.assertEqual(context.exception.code, emulator.EXIT_MISUSE)
-        self.assertEqual(err.getvalue(),
-                         "exit: abc: numeric argument required\n")
+    def test_read_both_values(self):
+        """Из конфига читаются пути к VFS и к скрипту."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_file(folder, "c.yaml", "vfs: a.xml\nscript: s.txt\n")
+            data = emulator.read_config(path)
+        self.assertEqual(data, {"vfs": "a.xml", "script": "s.txt"})
 
-    def test_exit_too_many_arguments(self):
-        """При лишних аргументах ошибка выводится, а выхода нет."""
-        out, err = capture(emulator.execute, "exit", ["1", "2"])
-        self.assertEqual(out, "")
-        self.assertEqual(err, "exit: too many arguments\n")
+    def test_empty_config(self):
+        """Пустой конфиг — это конфиг без настроек."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_file(folder, "c.yaml", "# nothing\n")
+            self.assertEqual(emulator.read_config(path), {})
+
+    def test_missing_config(self):
+        """Нет файла конфига — сообщение об ошибке."""
+        message = exit_message(emulator.read_config, "no/such.yaml")
+        self.assertIn("Config error: cannot read 'no/such.yaml'", message)
+
+    def test_invalid_yaml(self):
+        """Некорректный YAML — сообщение об ошибке."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_file(folder, "c.yaml", "vfs: [a.xml\nscript: s\n")
+            message = exit_message(emulator.read_config, path)
+        self.assertIn("Config error: cannot read", message)
+
+    def test_config_is_not_a_mapping(self):
+        """Список вместо пар «ключ: значение» — ошибка."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_file(folder, "c.yaml", "- a\n- b\n")
+            message = exit_message(emulator.read_config, path)
+        self.assertIn("must contain 'key: value' pairs", message)
+
+    def test_value_is_not_a_string(self):
+        """Число вместо пути — ошибка."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_file(folder, "c.yaml", "vfs: 42\n")
+            message = exit_message(emulator.read_config, path)
+        self.assertIn("'vfs'", message)
+        self.assertIn("must be a string", message)
+
+    def test_file_has_priority(self):
+        """Значения из файла важнее значений из командной строки."""
+        args = emulator.parse_args(["--vfs", "cli.xml", "--script", "cli.txt"])
+        file_data = {"vfs": "file.xml", "script": "file.txt"}
+        settings = emulator.merge_settings(args, file_data)
+        self.assertEqual(settings, file_data)
+
+    def test_command_line_fills_gaps(self):
+        """Чего нет в файле, берётся из командной строки."""
+        args = emulator.parse_args(["--vfs", "cli.xml", "--script", "cli.txt"])
+        settings = emulator.merge_settings(args, {"vfs": "file.xml"})
+        self.assertEqual(settings, {"vfs": "file.xml", "script": "cli.txt"})
+
+    def test_empty_value_in_file_does_not_erase(self):
+        """Пустое значение в файле не стирает значение из командной строки."""
+        args = emulator.parse_args(["--vfs", "cli.xml"])
+        settings = emulator.merge_settings(args, {"vfs": None})
+        self.assertEqual(settings["vfs"], "cli.xml")
+
+    def test_no_parameters(self):
+        """Без параметров все настройки не заданы."""
+        settings = emulator.merge_settings(emulator.parse_args([]), {})
+        self.assertEqual(settings, {"vfs": None, "script": None})
+
+    def test_debug_output(self):
+        """Отладочный вывод показывает параметры и итоговые значения."""
+        args = emulator.parse_args(["--vfs", "a.xml", "--config", "c.yaml"])
+        settings = {"vfs": "a.xml", "script": None}
+        out = printed(emulator.print_debug, args, {}, settings)
+        self.assertIn("vfs=a.xml, script=None, config=c.yaml", out)
+        self.assertIn("used values : vfs=a.xml, script=None", out)
+
+
+class ScriptTests(unittest.TestCase):
+    """Выполнение стартового скрипта."""
+
+    def run_text(self, text):
+        """Выполняет скрипт с текстом text и возвращает его вывод."""
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_file(folder, "start.txt", text)
+            with contextlib.redirect_stdout(out):
+                with contextlib.suppress(SystemExit):
+                    emulator.run_script(path, PROMPT)
+        return out.getvalue()
+
+    def test_input_and_output_are_shown(self):
+        """На экране видны и введённая команда, и её вывод."""
+        out = self.run_text("ls -l\n")
+        self.assertEqual(out, "$ ls -l\ncommand: ls, arguments: ['-l']\n")
+
+    def test_comments(self):
+        """Комментарии показываются, но не выполняются."""
+        out = self.run_text("# hello\nls a # why\n")
+        self.assertEqual(out, "$ # hello\n$ ls a # why\n"
+                              "command: ls, arguments: ['a']\n")
+
+    def test_blank_lines_are_skipped(self):
+        """Пустые строки пропускаются."""
+        self.assertEqual(self.run_text("\n  \n"), "")
+
+    def test_errors_do_not_stop_script(self):
+        """После ошибочной команды скрипт продолжается."""
+        out = self.run_text("foo\nls\n")
+        self.assertEqual(out, "$ foo\nfoo: command not found\n"
+                              "$ ls\ncommand: ls, arguments: []\n")
+
+    def test_exit_stops_script(self):
+        """Команда exit прекращает выполнение скрипта."""
+        out = self.run_text("exit\nls\n")
+        self.assertEqual(out, "$ exit\n")
+
+    def test_missing_script(self):
+        """Нет файла скрипта — сообщение об ошибке."""
+        message = exit_message(emulator.run_script, "no/such.txt", PROMPT)
+        self.assertIn("Script error: cannot read 'no/such.txt'", message)
 
 
 class ReplTests(unittest.TestCase):
-    """Проверки цикла REPL с подменой ввода."""
+    """Интерактивный цикл (ввод подменяется)."""
 
-    def test_prompt_is_passed_to_input(self):
-        """Приглашение передаётся в input."""
-        _, _, fake_input = run_session([EOFError()])
-        fake_input.assert_called_with("$ ")
+    def run_input(self, lines):
+        """Запускает REPL на заданных строках и возвращает вывод."""
+        with mock.patch("builtins.input", side_effect=lines):
+            return printed(emulator.run_repl, PROMPT)
 
     def test_session(self):
-        """Сессия: заглушки, пустые строки, ошибка и выход."""
-        lines = ["ls -l", "", "   ", "cd /tmp", "foo", "exit"]
-        out, err, _ = run_session(lines)
-        self.assertEqual(out,
-                         "command: ls, arguments: ['-l']\n"
-                         "command: cd, arguments: ['/tmp']\n")
-        self.assertEqual(err, "foo: command not found\n")
+        """Команды выполняются, пустые строки пропускаются."""
+        out = self.run_input(["ls", "", "foo", EOFError()])
+        self.assertEqual(out, "command: ls, arguments: []\n"
+                              "foo: command not found\nexit\n")
 
-    def test_exit_stops_reading_input(self):
-        """После exit новые строки не читаются."""
-        _, _, fake_input = run_session(["exit", "ls"])
-        self.assertEqual(fake_input.call_count, 1)
-
-    def test_eof_ends_session(self):
-        """Конец ввода (Ctrl+D) завершает REPL и печатает exit."""
-        out, _, _ = run_session(["ls", EOFError()])
-        self.assertEqual(out, "command: ls, arguments: []\nexit\n")
-
-    def test_keyboard_interrupt_keeps_session(self):
-        """Ctrl+C сбрасывает строку, но сессия продолжается."""
-        out, _, _ = run_session([KeyboardInterrupt(), "cd", EOFError()])
+    def test_ctrl_c(self):
+        """Ctrl+C сбрасывает строку, но работа продолжается."""
+        out = self.run_input([KeyboardInterrupt(), "cd", EOFError()])
         self.assertEqual(out, "\ncommand: cd, arguments: []\nexit\n")
 
 
-class MainTests(unittest.TestCase):
-    """Проверки точки входа и включения редактирования строки."""
+class ProgramTests(unittest.TestCase):
+    """Запуск программы целиком, как это делает пользователь."""
 
-    def test_main_returns_ok_on_end_of_input(self):
-        """main возвращает код 0, когда ввод закончился."""
-        with mock.patch("builtins.input", side_effect=EOFError):
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(emulator.main(), emulator.EXIT_OK)
-
-    def test_line_editing_requests_readline(self):
-        """Редактирование строки включается через модуль readline."""
-        with mock.patch("importlib.import_module") as fake_import:
-            emulator.enable_line_editing()
-        fake_import.assert_called_once_with("readline")
-
-    def test_line_editing_without_readline(self):
-        """Отсутствие readline (например, в Windows) не вызывает ошибки."""
-        with mock.patch("importlib.import_module", side_effect=ImportError):
-            emulator.enable_line_editing()
-
-
-class ProcessTests(unittest.TestCase):
-    """Проверки запуска эмулятора как отдельного процесса."""
-
-    def run_emulator(self, text):
-        """Запускает python -m src.emulator и подаёт text на stdin."""
-        return subprocess.run(
-            [sys.executable, "-m", "src.emulator"],
-            input=text,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            cwd=REPO_ROOT,
-            env=dict(os.environ, PYTHONUTF8="1"),
-            timeout=PROCESS_TIMEOUT,
-            check=False,
-        )
-
-    def test_exit_code_and_output(self):
-        """Процесс печатает вывод команд и возвращает код из exit."""
-        result = self.run_emulator("ls -l /tmp\nfoo\nexit 3\n")
-        self.assertEqual(result.returncode, CUSTOM_EXIT_CODE)
-        self.assertIn("command: ls, arguments: ['-l', '/tmp']", result.stdout)
-        self.assertIn("foo: command not found", result.stderr)
-        self.assertIn(emulator.build_prompt(), result.stdout)
-
-    def test_end_of_input(self):
-        """Конец ввода завершает процесс с кодом 0."""
-        result = self.run_emulator("")
-        self.assertEqual(result.returncode, emulator.EXIT_OK)
+    def test_no_parameters(self):
+        """Без параметров: подпись, отладочный вывод и конец ввода."""
+        result = start_program([])
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.splitlines()[0], emulator.BANNER)
+        self.assertIn("[debug] command line: vfs=None", result.stdout)
         self.assertTrue(result.stdout.endswith("exit\n"))
+
+    def test_config_beats_command_line(self):
+        """Конфиг важнее командной строки, скрипт из конфига выполняется."""
+        result = start_program(["--vfs", "cli.xml", "--script",
+                                "examples/start_a.txt", "--config",
+                                "examples/config_full.yaml"])
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("used values : vfs=examples/vfs/sample.xml, "
+                      "script=examples/start_b.txt", result.stdout)
+        self.assertIn("# Start script B", result.stdout)
+        self.assertNotIn("# Start script A", result.stdout)
+
+    def test_script_dialog_with_comments_and_error(self):
+        """Скрипт показывает диалог, комментарии и ошибку команды."""
+        result = start_program(["--script", "examples/start_a.txt"])
+        self.assertIn("# Start script A", result.stdout)
+        self.assertIn("command: ls, arguments: ['-l', '/tmp']", result.stdout)
+        self.assertIn("foo: command not found", result.stdout)
+
+    def test_bad_config_stops_program(self):
+        """Ошибка в конфиге: сообщение и код завершения 1."""
+        result = start_program(["--config", "examples/config_bad_syntax.yaml"])
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Config error", result.stderr)
+
+    def test_missing_script_stops_program(self):
+        """Нет файла скрипта: сообщение и код завершения 1."""
+        result = start_program(["--script", "missing.txt"])
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Script error", result.stderr)
+
+    def test_unknown_parameter(self):
+        """Неизвестный параметр: справка по использованию, код 2."""
+        result = start_program(["--unknown"])
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage:", result.stderr)
 
 
 if __name__ == "__main__":

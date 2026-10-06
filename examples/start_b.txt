@@ -1,0 +1,4 @@
+# Start script B: an alternative script
+cd /
+ls -a
+exit

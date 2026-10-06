@@ -1,111 +1,124 @@
-import contextlib
+"""Эмулятор оболочки (вариант 14): REPL, параметры, стартовый скрипт."""
+
+import argparse
 import getpass
-import importlib
 import socket
 import sys
 
-DEFAULT_USER = "user"
-DEFAULT_HOST = "localhost"
-HOST_SEPARATOR = "."
-HOME_MARK = "~"
-PROMPT_END = "$ "
-BYTE_ORDER_MARK = "﻿"
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
-EXIT_OK = 0
-EXIT_MISUSE = 2
-EXIT_CODE_MASK = 0xFF
-MAX_EXIT_ARGS = 1
+BANNER = "=== Virtual machine: shell emulator ==="
+SETTINGS = ("vfs", "script")
 
 
-def get_username() -> str:
-    """Возвращает имя текущего пользователя реальной ОС."""
+def get_prompt():
+    """Приглашение к вводу: имя пользователя и компьютера из реальной ОС."""
+    return f"{getpass.getuser()}@{socket.gethostname()}:~$ "
+
+
+def parse_args(argv=None):
+    """Разбирает параметры командной строки."""
+    parser = argparse.ArgumentParser(
+        description="Эмулятор командной оболочки")
+    parser.add_argument("--vfs", help="путь к физическому расположению VFS")
+    parser.add_argument("--script", help="путь к стартовому скрипту")
+    parser.add_argument("--config", help="путь к конфигурационному файлу YAML")
+    return parser.parse_args(argv)
+
+
+def read_config(path):
+    """Читает YAML-конфиг; при ошибке сообщает о ней и завершает работу."""
+    if yaml is None:
+        sys.exit("Config error: PyYAML is not installed (pip install pyyaml)")
     try:
-        return getpass.getuser() or DEFAULT_USER
-    except (ImportError, KeyError, OSError):
-        return DEFAULT_USER
+        with open(path, encoding="utf-8-sig") as file:
+            data = yaml.safe_load(file) or {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
+        sys.exit(f"Config error: cannot read '{path}': {error}")
+    if not isinstance(data, dict):
+        sys.exit(f"Config error: '{path}' must contain 'key: value' pairs")
+    for key in SETTINGS:
+        if data.get(key) is not None and not isinstance(data[key], str):
+            sys.exit(f"Config error: '{key}' in '{path}' must be a string")
+    return data
 
 
-def get_hostname() -> str:
-    """Возвращает короткое имя хоста реальной ОС (до первой точки)."""
-    try:
-        full_name = socket.gethostname()
-    except OSError:
-        return DEFAULT_HOST
-    return full_name.split(HOST_SEPARATOR)[0] or DEFAULT_HOST
+def merge_settings(args, file_data):
+    """Объединяет настройки: значения из файла важнее командной строки."""
+    settings = {"vfs": args.vfs, "script": args.script}
+    for key in SETTINGS:
+        if file_data.get(key) is not None:
+            settings[key] = file_data[key]
+    return settings
 
 
-def build_prompt() -> str:
-    """Формирует приглашение к вводу вида ``username@hostname:~$ ``.
+def print_debug(args, file_data, settings):
+    """Отладочный вывод всех заданных параметров."""
+    print(f"[debug] command line: vfs={args.vfs}, script={args.script}, "
+          f"config={args.config}")
+    print(f"[debug] config file : {file_data}")
+    print(f"[debug] used values : vfs={settings['vfs']}, "
+          f"script={settings['script']}")
 
-    Текущий каталог пока всегда домашний (``~``): команда cd — заглушка.
-    """
-    user = get_username()
-    host = get_hostname()
-    return f"{user}@{host}:{HOME_MARK}{PROMPT_END}"
 
-
-def parse_line(line: str) -> tuple[str, list[str]]:
-    "Разбивает строку на команду и аргументы по пробельным символам."
-    parts = line.lstrip(BYTE_ORDER_MARK).split()
-    if not parts:
+def parse_line(line):
+    """Делит строку на команду и аргументы; всё после # — комментарий."""
+    words = line.split("#")[0].split()
+    if not words:
         return "", []
-    return parts[0], parts[1:]
+    return words[0], words[1:]
 
 
-def describe_call(name: str, args: list[str]) -> str:
-    """Формирует вывод команды-заглушки: её имя и аргументы."""
-    return f"command: {name}, arguments: {args}"
+def print_stub(name, args):
+    """Печатает имя команды-заглушки и её аргументы."""
+    print(f"command: {name}, arguments: {args}")
 
 
-def cmd_ls(args: list[str]) -> None:
-    """Заглушка команды ls: выводит своё имя и аргументы."""
-    print(describe_call("ls", args))
+def cmd_ls(args):
+    """Заглушка команды ls."""
+    print_stub("ls", args)
 
 
-def cmd_cd(args: list[str]) -> None:
-    """Заглушка команды cd: выводит своё имя и аргументы."""
-    print(describe_call("cd", args))
+def cmd_cd(args):
+    """Заглушка команды cd."""
+    print_stub("cd", args)
 
 
-def cmd_exit(args: list[str]) -> None:
+def cmd_exit(_args):
     """Завершает работу эмулятора."""
-    if not args:
-        raise SystemExit(EXIT_OK)
+    sys.exit()
+
+
+COMMANDS = {"ls": cmd_ls, "cd": cmd_cd, "exit": cmd_exit}
+
+
+def run_line(line):
+    """Разбирает строку и выполняет команду, если она есть."""
+    command, args = parse_line(line)
+    if command in COMMANDS:
+        COMMANDS[command](args)
+    elif command:
+        print(f"{command}: command not found")
+
+
+def run_script(path, prompt):
+    """Выполняет команды из файла, показывая ввод и вывод как диалог."""
     try:
-        code = int(args[0])
-    except ValueError:
-        print(f"exit: {args[0]}: numeric argument required", file=sys.stderr)
-        raise SystemExit(EXIT_MISUSE) from None
-    if len(args) > MAX_EXIT_ARGS:
-        print("exit: too many arguments", file=sys.stderr)
-        return
-    raise SystemExit(code & EXIT_CODE_MASK)
+        with open(path, encoding="utf-8-sig") as file:
+            lines = file.read().splitlines()
+    except (OSError, UnicodeDecodeError) as error:
+        sys.exit(f"Script error: cannot read '{path}': {error}")
+    for line in lines:
+        if line.strip():
+            print(prompt + line.rstrip())
+            run_line(line)
 
 
-COMMANDS = {
-    "ls": cmd_ls,
-    "cd": cmd_cd,
-    "exit": cmd_exit,
-}
-
-
-def execute(command: str, args: list[str]) -> None:
-    """Выполняет команду или сообщает, что такой команды нет."""
-    handler = COMMANDS.get(command)
-    if handler is None:
-        print(f"{command}: command not found", file=sys.stderr)
-        return
-    handler(args)
-
-
-def enable_line_editing() -> None:
-    """Включает историю и редактирование ввода, если есть readline."""
-    with contextlib.suppress(ImportError):
-        importlib.import_module("readline")
-
-
-def run_repl(prompt: str) -> None:
-    """Запускает цикл «приглашение — чтение — разбор — выполнение»."""
+def run_repl(prompt):
+    """Интерактивный цикл: приглашение, ввод, выполнение команды."""
     while True:
         try:
             line = input(prompt)
@@ -115,17 +128,21 @@ def run_repl(prompt: str) -> None:
         except KeyboardInterrupt:
             print()
             continue
-        command, args = parse_line(line)
-        if command:
-            execute(command, args)
+        run_line(line)
 
 
-def main() -> int:
-    """Точка входа: запускает REPL и возвращает код завершения."""
-    enable_line_editing()
-    run_repl(build_prompt())
-    return EXIT_OK
+def main():
+    """Точка входа: параметры, отладочный вывод, скрипт, затем REPL."""
+    args = parse_args()
+    print(BANNER)
+    file_data = read_config(args.config) if args.config else {}
+    settings = merge_settings(args, file_data)
+    print_debug(args, file_data, settings)
+    prompt = get_prompt()
+    if settings["script"]:
+        run_script(settings["script"], prompt)
+    run_repl(prompt)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

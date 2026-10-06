@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vfs name="sample">
+  <dir name="/">
+    <dir name="home">
+      <dir name="user">
+        <file name="notes.txt">hello</file>
+      </dir>
+    </dir>
+    <file name="readme.txt">sample VFS</file>
+  </dir>
+</vfs>

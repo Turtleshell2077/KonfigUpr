@@ -1,146 +1,211 @@
-# Эмулятор командной оболочки UNIX-подобной ОС
+# Эмулятор командной оболочки (вариант 14)
 
-Практическая работа № 1 по дисциплине «Конфигурационное управление»
-(РТУ МИРЭА, ИКБО-10-25), **вариант № 14**.
-
-Текущее состояние: **этап 1 — REPL** (готов). Следующие этапы: 2 —
-конфигурация, 3 — VFS, 4 — основные команды, 5 — дополнительные команды.
+Практическая работа № 1 по дисциплине «Конфигурационное управление» (РТУ МИРЭА, ИКБО-10-25).
+Готовы этап 1 (REPL) и этап 2 (конфигурация). Дальше: этап 3 — VFS, этапы 4–5 — команды.
 
 ## 1. Общее описание
 
-Консольное приложение (CLI), которое имитирует работу в командной строке
-UNIX-подобной ОС. Оно в цикле выводит приглашение к вводу, читает строку,
-разбивает её на команду и аргументы и выполняет команду.
+Консольная программа на Python, которая имитирует работу в командной строке UNIX-подобной ОС. Это виртуальная
+машина: команды выполняются внутри программы, настоящие программы ОС не запускаются. Сверху при запуске
+печатается подпись `=== Virtual machine: shell emulator ===`.
 
-На этапе 1 реализован минимальный прототип:
+Что умеет программа сейчас:
 
-- приглашение к вводу формируется из реальных данных ОС, в которой запущен
-  эмулятор: `username@hostname:~$`;
-- парсер делит строку на команду и аргументы по пробельным символам;
-- команды `ls` и `cd` — заглушки, они печатают своё имя и аргументы;
-- команда `exit` завершает работу эмулятора;
-- неизвестные команды и неверные аргументы `exit` обрабатываются как в
-  настоящей оболочке — сообщением об ошибке, без падения программы.
+- Приглашение к вводу строится из данных ОС: `username@hostname:~$`.
+- Команды `ls` и `cd` — заглушки, они печатают своё имя и аргументы. Команда `exit` завершает работу.
+  Неизвестная команда даёт сообщение `command not found`.
+- Параметры запуска `--vfs`, `--script`, `--config` и конфигурационный файл YAML. Значения из файла важнее,
+  чем значения из командной строки.
+- Стартовый скрипт: команды из файла выполняются по порядку, на экране видны и ввод, и вывод (как диалог).
+  Поддерживаются комментарии `#`.
+- При запуске печатаются все заданные параметры (отладочный вывод). Об ошибках (нет конфига, неверный YAML,
+  нет скрипта) программа сообщает и завершается.
 
-Используется только стандартная библиотека Python, сторонние пакеты не нужны.
+VFS пока не загружается (это этап 3): путь `--vfs` только запоминается и показывается в отладочном выводе.
 
 ## 2. Описание функций и настроек
 
+### Параметры командной строки
+
+| Параметр | Что задаёт |
+|---|---|
+| `--vfs ПУТЬ` | Путь к физическому расположению VFS |
+| `--script ПУТЬ` | Путь к стартовому скрипту |
+| `--config ПУТЬ` | Путь к конфигурационному файлу YAML |
+| `-h`, `--help` | Справка |
+
+Все параметры необязательны. Относительные пути считаются от текущей папки.
+
+### Конфигурационный файл (YAML)
+
+В файле два необязательных ключа: путь к VFS и путь к стартовому скрипту.
+
+```yaml
+vfs: examples/vfs/sample.xml
+script: examples/start_b.txt
+```
+
+**Приоритет:** если значение есть в файле, берётся оно, а не значение из командной строки. Если в файле
+значения нет, берётся значение из командной строки. Значения должны быть строками. Пути Windows пишите без
+кавычек или с прямыми слэшами (`D:/data/vfs.xml`).
+
+### Стартовый скрипт
+
+Текстовый файл, по одной команде в строке.
+
+- Каждая строка показывается с приглашением, затем идёт вывод команды, как в диалоге с пользователем.
+- Комментарий начинается с `#` (целая строка или конец строки). Комментарии показываются, но не выполняются.
+- Пустые строки пропускаются. Ошибочная команда выдаёт сообщение, скрипт продолжается.
+- Если скрипт закончился без `exit`, программа остаётся в интерактивном режиме.
+
+### Ошибки
+
+| Ситуация | Сообщение | Код завершения |
+|---|---|---|
+| Конфиг не найден, не читается или неверный YAML | `Config error: cannot read ...` | 1 |
+| В конфиге не пары «ключ: значение» или значение не строка | `Config error: ...` | 1 |
+| Скрипт не найден или не читается | `Script error: cannot read ...` | 1 |
+| Неизвестный параметр командной строки | `usage: ...` и описание ошибки | 2 |
+
 ### Команды эмулятора
 
-| Команда | Описание |
+| Команда | Что делает |
 |---|---|
-| `ls [аргументы...]` | Заглушка. Печатает `command: ls, arguments: [...]`. |
-| `cd [аргументы...]` | Заглушка. Печатает `command: cd, arguments: [...]`. |
-| `exit [код]` | Завершает эмулятор. Без аргумента код возврата 0, с числом — это число (по модулю 256, как в bash). |
+| `ls [аргументы]` | Заглушка: печатает `command: ls, arguments: [...]` |
+| `cd [аргументы]` | Заглушка: печатает `command: cd, arguments: [...]` |
+| `exit` | Завершает работу эмулятора |
 
-Особые случаи:
+`Ctrl+D` (в Windows `Ctrl+Z`, затем `Enter`) завершает работу, `Ctrl+C` сбрасывает текущую строку.
 
-- пустая строка и строка из одних пробелов игнорируются;
-- неизвестная команда: `имя: command not found` (в stderr);
-- `exit abc`: `exit: abc: numeric argument required` (в stderr), выход с кодом 2;
-- `exit 1 2`: `exit: too many arguments` (в stderr), выхода нет;
-- `Ctrl+D` (конец ввода; в Windows — `Ctrl+Z`, затем `Enter`) завершает
-  эмулятор и печатает `exit`, как в bash;
-- `Ctrl+C` сбрасывает текущую строку, эмулятор продолжает работу.
+### Функции (файл `src/emulator.py`)
 
-### Функции модуля `src/emulator.py`
-
-| Функция | Назначение |
+| Функция | Что делает |
 |---|---|
-| `get_username()` | Имя пользователя реальной ОС (`getpass.getuser()`); при ошибке — `user`. |
-| `get_hostname()` | Короткое имя хоста реальной ОС (до первой точки); при ошибке — `localhost`. |
-| `build_prompt()` | Строка приглашения `username@hostname:~$ `. |
-| `parse_line(line)` | Делит строку по пробелам. Возвращает `(команда, аргументы)`, для пустой строки — `("", [])`. |
-| `describe_call(name, args)` | Формирует вывод заглушки: имя команды и аргументы. |
-| `cmd_ls(args)`, `cmd_cd(args)` | Заглушки команд `ls` и `cd`. |
-| `cmd_exit(args)` | Команда `exit`; завершает работу через `SystemExit`. |
-| `execute(command, args)` | Ищет команду в таблице `COMMANDS` и вызывает её либо сообщает, что команда не найдена. |
-| `enable_line_editing()` | Включает историю и редактирование строки (`readline`), если он доступен (Linux/macOS). |
-| `run_repl(prompt)` | Цикл «приглашение — чтение — разбор — выполнение». |
-| `main()` | Точка входа: запускает REPL и возвращает код завершения. |
-
-### Настройки
-
-На этапе 1 у эмулятора нет параметров командной строки и конфигурационных
-файлов: они появятся на этапе 2.
+| `get_prompt()` | Приглашение `username@hostname:~$ ` из имени пользователя и компьютера |
+| `parse_args(argv)` | Разбирает параметры командной строки |
+| `read_config(path)` | Читает YAML-конфиг, проверяет его; при ошибке сообщает и завершает работу |
+| `merge_settings(args, file_data)` | Объединяет настройки: значения из файла важнее командной строки |
+| `print_debug(args, file_data, settings)` | Отладочный вывод всех параметров |
+| `parse_line(line)` | Делит строку на команду и аргументы, отбрасывает комментарий |
+| `print_stub(name, args)` | Печатает имя команды-заглушки и аргументы |
+| `cmd_ls(args)`, `cmd_cd(args)` | Заглушки команд `ls` и `cd` |
+| `cmd_exit(_args)` | Команда `exit` |
+| `run_line(line)` | Разбирает строку и выполняет команду |
+| `run_script(path, prompt)` | Выполняет скрипт, показывая ввод и вывод как диалог |
+| `run_repl(prompt)` | Интерактивный цикл: приглашение, ввод, выполнение |
+| `main()` | Точка входа: параметры, отладочный вывод, скрипт, затем интерактивный режим |
 
 ## 3. Сборка, запуск и тесты
 
-Требуется Python 3.9 или новее (проверено на 3.9 и 3.10). Сборка не нужна.
+Нужен Python 3.9 или новее и библиотека PyYAML для чтения YAML. Сборка не требуется.
 
-**Запуск на Windows** (cmd или PowerShell, из корня репозитория):
+```
+pip install -r requirements.txt
+```
+
+Запуск на Windows (из корня проекта; параметры пишутся после имени):
 
 ```
 .\run.bat
+.\run.bat --script examples/start_a.txt
 ```
 
-**Запуск на Linux / macOS**:
+Запуск на Linux/macOS: `sh run.sh [параметры]`. Или напрямую: `python src/emulator.py [параметры]`.
 
-```
-sh run.sh
-```
-
-Или напрямую, из корня репозитория:
-
-```
-python -m src.emulator
-```
-
-**Запуск тестов** (из корня репозитория):
+Тесты (из корня проекта):
 
 ```
 python -m unittest -v
 ```
 
-Тесты проверяют разбор строки, формирование приглашения, все команды, цикл
-REPL (включая `Ctrl+D` и `Ctrl+C`) и запуск эмулятора как отдельного процесса.
+Скрипты для проверки параметров запускают эмулятор несколько раз; в каждом есть вызовы со всеми параметрами
+(`--vfs`, `--script`, `--config`, `--help`). В конце скрипты ждут нажатия клавиши.
+
+| Скрипт (папка `scripts/`) | Что проверяет |
+|---|---|
+| `test_params.bat` | Каждый параметр отдельно и все вместе |
+| `test_priority.bat` | Приоритет значений из конфига над командной строкой |
+| `test_errors.bat` | Ошибки: нет конфига, неверный YAML, нет скрипта, неизвестный параметр |
+
+```
+.\scripts\test_params.bat
+.\scripts\test_priority.bat
+.\scripts\test_errors.bat
+```
 
 ## 4. Примеры использования
 
-Интерактивная сессия (в примере пользователь `alice`, хост `workstation`):
+Запуск без параметров (пользователь `alice`, компьютер `workstation`):
 
 ```
-alice@workstation:~$ ls
-command: ls, arguments: []
+=== Virtual machine: shell emulator ===
+[debug] command line: vfs=None, script=None, config=None
+[debug] config file : {}
+[debug] used values : vfs=None, script=None
 alice@workstation:~$ ls -l /tmp
 command: ls, arguments: ['-l', '/tmp']
-alice@workstation:~$ cd   /home    alice
-command: cd, arguments: ['/home', 'alice']
-alice@workstation:~$
-alice@workstation:~$ foo bar
+alice@workstation:~$ foo
 foo: command not found
-alice@workstation:~$ exit 1 2
-exit: too many arguments
 alice@workstation:~$ exit
 ```
 
-Код возврата: `exit 3` завершает процесс с кодом 3, а `exit abc` печатает
-`exit: abc: numeric argument required` и завершает процесс с кодом 2:
+Стартовый скрипт с комментариями и ошибкой (`.\run.bat --script examples/start_a.txt`):
 
 ```
-alice@workstation:~$ exit abc
-exit: abc: numeric argument required
+=== Virtual machine: shell emulator ===
+[debug] command line: vfs=None, script=examples/start_a.txt, config=None
+[debug] config file : {}
+[debug] used values : vfs=None, script=examples/start_a.txt
+alice@workstation:~$ # Start script A: dialog, comments and error handling
+alice@workstation:~$ ls
+command: ls, arguments: []
+alice@workstation:~$ ls -l /tmp   # a comment after a command is ignored
+command: ls, arguments: ['-l', '/tmp']
+alice@workstation:~$ # an unknown command is reported, the script goes on
+alice@workstation:~$ foo bar
+foo: command not found
+alice@workstation:~$ cd /home/user
+command: cd, arguments: ['/home/user']
+alice@workstation:~$ exit
 ```
 
-Ввод из конвейера:
+Приоритет конфига. В командной строке указаны `minimal.xml` и `start_a.txt`, а в конфиге другие значения,
+поэтому берутся значения из файла и выполняется `start_b.txt`:
 
 ```
-echo "ls -l" | python -m src.emulator
+.\run.bat --vfs examples/vfs/minimal.xml --script examples/start_a.txt --config examples/config_full.yaml
+```
+
+```
+=== Virtual machine: shell emulator ===
+[debug] command line: vfs=examples/vfs/minimal.xml, script=examples/start_a.txt, config=examples/config_full.yaml
+[debug] config file : {'vfs': 'examples/vfs/sample.xml', 'script': 'examples/start_b.txt'}
+[debug] used values : vfs=examples/vfs/sample.xml, script=examples/start_b.txt
+alice@workstation:~$ # Start script B: an alternative script
+alice@workstation:~$ cd /
+command: cd, arguments: ['/']
+alice@workstation:~$ ls -a
+command: ls, arguments: ['-a']
+alice@workstation:~$ exit
+```
+
+Ошибка в конфиге (`.\run.bat --config examples/config_bad_syntax.yaml`), код завершения 1:
+
+```
+=== Virtual machine: shell emulator ===
+Config error: cannot read 'examples/config_bad_syntax.yaml': while parsing a flow sequence
+  in "examples/config_bad_syntax.yaml", line 2, column 6
+expected ',' or ']', but got ':'
+  in "examples/config_bad_syntax.yaml", line 3, column 7
 ```
 
 ## Структура репозитория
 
 ```
-src/emulator.py          исходный код эмулятора
-tests/test_emulator.py   модульные тесты
-run.bat, run.sh          скрипты запуска (Windows / Linux, macOS)
-.gitignore               исключения для git
-.gitattributes           окончания строк (LF для .sh, CRLF для .bat)
-README.md                документация
+src/emulator.py       программа
+tests/                тесты (unittest)
+scripts/              скрипты Windows для проверки параметров
+examples/             примеры: стартовые скрипты, конфиги YAML, файлы VFS
+requirements.txt      зависимости (PyYAML)
+run.bat, run.sh       запуск (Windows / Linux, macOS)
 ```
-
-## Соглашение о коммитах
-
-Коммиты оформляются по спецификации Conventional Commits, например:
-`feat(repl): add minimal REPL with ls, cd stubs and exit`.

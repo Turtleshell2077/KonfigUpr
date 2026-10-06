@@ -1,0 +1,3 @@
+# Invalid YAML: the bracket is never closed
+vfs: [examples/vfs/sample.xml
+script: examples/start_b.txt

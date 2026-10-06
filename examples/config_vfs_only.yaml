@@ -1,0 +1,2 @@
+# Only the VFS path is set; the script comes from the command line
+vfs: examples/vfs/sample.xml
