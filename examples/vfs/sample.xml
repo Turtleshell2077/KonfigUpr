@@ -3,9 +3,11 @@
   <dir name="home">
     <dir name="user">
       <file name="notes.txt">hello</file>
-      <file name="data.bin" encoding="base64">AAECAwQ=</file>
+      <file name="data.bin" encoding="base64">//79/Ps=</file>
       <dir name="docs">
-        <file name="todo.txt">write the report</file>
+        <file name="todo.txt">write the report
+check the code
+send to teacher</file>
       </dir>
     </dir>
   </dir>

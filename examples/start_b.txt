@@ -1,4 +1,4 @@
 # Start script B: an alternative script
-cd /
-ls -a
+whoami
+vfs-info
 exit

@@ -1,8 +1,7 @@
 # Start script A: dialog, comments and error handling
-ls
-ls -l /tmp   # a comment after a command is ignored
+whoami
+vfs-info   # a comment after a command is ignored
 
 # an unknown command is reported, the script goes on
 foo bar
-cd /home/user
 exit

@@ -1,0 +1,53 @@
+# Stage 4 start script: ls, cd, tac, rev, whoami
+# Use it with the VFS examples/vfs/sample.xml
+
+# whoami prints the name of the current user
+whoami
+whoami extra
+
+# ls without arguments lists the current folder (folders end with /)
+ls
+# ls with a path: absolute, relative, . and ..
+ls /home/user
+ls home
+ls .
+ls ..
+# ls -l shows the type and the size of every entry
+ls -l /home/user
+# ls with a file name and with several paths
+ls readme.txt
+ls /home /home/user/docs
+# ls errors: no such path, unknown option
+ls /nope
+ls -x
+
+# cd changes the folder, the prompt shows the current path
+cd /home/user
+ls
+cd docs
+ls
+cd ..
+cd ../..
+cd /home/user/docs
+# cd without arguments goes to the root folder
+cd
+# cd errors: no such folder, a file instead of a folder, too many arguments
+cd /nope
+cd /readme.txt
+cd home user
+
+# tac prints the lines of a file in reverse order
+cd /home/user
+tac docs/todo.txt
+tac notes.txt docs/todo.txt
+# rev reverses every line
+rev notes.txt
+rev docs/todo.txt
+rev /readme.txt
+# tac and rev errors: no file, missing file, folder, binary file
+tac
+rev missing.txt
+tac docs
+rev data.bin
+
+exit

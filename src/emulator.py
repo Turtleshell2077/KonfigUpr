@@ -1,4 +1,4 @@
-"""Эмулятор оболочки (вариант 14): REPL, параметры, скрипт и VFS."""
+"""Эмулятор оболочки (вариант 14): REPL, параметры, скрипт, VFS, команды."""
 
 import argparse
 import base64
@@ -15,11 +15,13 @@ except ImportError:
 
 BANNER = "=== Virtual machine: shell emulator ==="
 SETTINGS = ("vfs", "script")
+NO_VFS = "no VFS loaded (use --vfs or the config file)"
 
 
-def get_prompt():
-    """Приглашение к вводу: имя пользователя и компьютера из реальной ОС."""
-    return f"{getpass.getuser()}@{socket.gethostname()}:~$ "
+def get_prompt(vfs=None):
+    """Приглашение к вводу: пользователь и компьютер из ОС, текущая папка."""
+    path = "~" if vfs is None else "/" + "/".join(vfs["cwd"])
+    return f"{getpass.getuser()}@{socket.gethostname()}:{path}$ "
 
 
 def parse_args(argv=None):
@@ -121,11 +123,15 @@ def read_dir(element, path):
 
 
 def load_vfs(path):
-    """Загружает VFS из XML-файла в память; при ошибке завершает работу."""
+    """Загружает VFS из XML-файла в память; при ошибке завершает работу.
+
+    Текущая папка (cwd) — список имён от корня; сначала это корень.
+    """
     root = read_xml_root(path)
     if root.tag != "vfs":
         fail(path, "the root element must be <vfs>")
-    return {"name": root.get("name", "vfs"), "root": read_dir(root, path)}
+    return {"name": root.get("name", "vfs"), "root": read_dir(root, path),
+            "cwd": []}
 
 
 def count_nodes(directory):
@@ -160,6 +166,28 @@ def vfs_summary(vfs):
     return f"{vfs['name']} (folders: {folders}, files: {files})"
 
 
+def resolve_path(vfs, path):
+    """Путь (абсолютный или от текущей папки, с . и ..) -> список имён."""
+    parts = [] if path.startswith("/") else list(vfs["cwd"])
+    for name in path.split("/"):
+        if name == "..":
+            if parts:
+                parts.pop()
+        elif name not in ("", "."):
+            parts.append(name)
+    return parts
+
+
+def find_node(vfs, parts):
+    """Находит папку (словарь) или файл (байты) по списку имён, иначе None."""
+    node = vfs["root"]
+    for name in parts:
+        if not isinstance(node, dict) or name not in node:
+            return None
+        node = node[name]
+    return node
+
+
 def parse_line(line):
     """Делит строку на команду и аргументы; всё после # — комментарий."""
     words = line.split("#")[0].split()
@@ -168,19 +196,128 @@ def parse_line(line):
     return words[0], words[1:]
 
 
-def print_stub(name, args):
-    """Печатает имя команды-заглушки и её аргументы."""
-    print(f"command: {name}, arguments: {args}")
+def need_vfs(name, vfs):
+    """Проверяет, что VFS загружена; иначе печатает сообщение об этом."""
+    if vfs is None:
+        print(f"{name}: {NO_VFS}")
+    return vfs is not None
 
 
-def cmd_ls(args, _vfs):
-    """Заглушка команды ls."""
-    print_stub("ls", args)
+def split_args(args):
+    """Делит аргументы на параметры (начинаются с -) и пути."""
+    options = [arg for arg in args if arg.startswith("-")]
+    paths = [arg for arg in args if not arg.startswith("-")]
+    return options, paths
 
 
-def cmd_cd(args, _vfs):
-    """Заглушка команды cd."""
-    print_stub("cd", args)
+def entry_line(name, node, long_format):
+    """Строка для ls: имя (у папок со знаком /), с -l ещё тип и размер."""
+    is_dir = isinstance(node, dict)
+    shown = name + "/" if is_dir else name
+    if not long_format:
+        return shown
+    size = "-" if is_dir else str(len(node))
+    return f"{'d' if is_dir else '-'} {size:>8} {shown}"
+
+
+def list_path(vfs, path, long_format):
+    """Печатает содержимое папки или строку для файла (команда ls)."""
+    node = find_node(vfs, resolve_path(vfs, path))
+    if node is None:
+        print(f"ls: cannot access '{path}': No such file or directory")
+    elif isinstance(node, dict):
+        for name in sorted(node):
+            print(entry_line(name, node[name], long_format))
+    else:
+        print(entry_line(path, node, long_format))
+
+
+def cmd_ls(args, vfs):
+    """Команда ls [-l] [путь...]: содержимое папки или сведения о файле."""
+    if not need_vfs("ls", vfs):
+        return
+    options, paths = split_args(args)
+    for option in options:
+        if option != "-l":
+            print(f"ls: invalid option -- '{option.lstrip('-')}'")
+            return
+    for number, path in enumerate(paths or ["."]):
+        if paths[1:]:
+            print(("\n" if number else "") + f"{path}:")
+        list_path(vfs, path, bool(options))
+
+
+def cmd_cd(args, vfs):
+    """Команда cd [путь]: переход в папку VFS (без пути — в корень)."""
+    if not need_vfs("cd", vfs):
+        return
+    if args[1:]:
+        print("cd: too many arguments")
+        return
+    parts = resolve_path(vfs, args[0]) if args else []
+    node = find_node(vfs, parts)
+    if node is None:
+        print(f"cd: {args[0]}: No such file or directory")
+    elif not isinstance(node, dict):
+        print(f"cd: {args[0]}: Not a directory")
+    else:
+        vfs["cwd"] = parts
+
+
+def read_vfs_text(command, path, vfs):
+    """Читает файл VFS как текст UTF-8; при ошибке печатает её и даёт None."""
+    node = find_node(vfs, resolve_path(vfs, path))
+    if node is None:
+        print(f"{command}: {path}: No such file or directory")
+    elif isinstance(node, dict):
+        print(f"{command}: {path}: Is a directory")
+    else:
+        try:
+            return node.decode("utf-8")
+        except UnicodeDecodeError:
+            print(f"{command}: {path}: not a text file")
+    return None
+
+
+def run_on_files(command, args, vfs, transform):
+    """Печатает строки каждого файла из args после преобразования."""
+    if not need_vfs(command, vfs):
+        return
+    if not args:
+        print(f"{command}: missing file operand")
+    for path in args:
+        text = read_vfs_text(command, path, vfs)
+        if text is not None:
+            for line in transform(text.splitlines()):
+                print(line)
+
+
+def reverse_lines(lines):
+    """Строки в обратном порядке (для tac)."""
+    return lines[::-1]
+
+
+def reverse_each(lines):
+    """Каждая строка наоборот (для rev)."""
+    return [line[::-1] for line in lines]
+
+
+def cmd_tac(args, vfs):
+    """Команда tac файл...: строки файла в обратном порядке."""
+    run_on_files("tac", args, vfs, reverse_lines)
+
+
+def cmd_rev(args, vfs):
+    """Команда rev файл...: каждая строка файла наоборот."""
+    run_on_files("rev", args, vfs, reverse_each)
+
+
+def cmd_whoami(args, _vfs):
+    """Команда whoami: печатает имя пользователя."""
+    if args:
+        print(f"whoami: extra operand '{args[0]}'")
+    else:
+        print(getpass.getuser())
 
 
 def cmd_exit(_args, _vfs):
@@ -190,8 +327,7 @@ def cmd_exit(_args, _vfs):
 
 def cmd_vfs_info(_args, vfs):
     """Служебная команда: показывает загруженную VFS и её дерево."""
-    if vfs is None:
-        print("vfs-info: no VFS loaded (use --vfs or the config file)")
+    if not need_vfs("vfs-info", vfs):
         return
     print("VFS:", vfs_summary(vfs))
     print("/")
@@ -199,8 +335,8 @@ def cmd_vfs_info(_args, vfs):
         print(line)
 
 
-COMMANDS = {"ls": cmd_ls, "cd": cmd_cd, "exit": cmd_exit,
-            "vfs-info": cmd_vfs_info}
+COMMANDS = {"ls": cmd_ls, "cd": cmd_cd, "tac": cmd_tac, "rev": cmd_rev,
+            "whoami": cmd_whoami, "exit": cmd_exit, "vfs-info": cmd_vfs_info}
 
 
 def run_line(line, vfs):
@@ -212,7 +348,7 @@ def run_line(line, vfs):
         print(f"{command}: command not found")
 
 
-def run_script(path, prompt, vfs):
+def run_script(path, vfs):
     """Выполняет команды из файла, показывая ввод и вывод как диалог."""
     try:
         with open(path, encoding="utf-8-sig") as file:
@@ -221,15 +357,15 @@ def run_script(path, prompt, vfs):
         sys.exit(f"Script error: cannot read '{path}': {error}")
     for line in lines:
         if line.strip():
-            print(prompt + line.rstrip())
+            print(get_prompt(vfs) + line.rstrip())
             run_line(line, vfs)
 
 
-def run_repl(prompt, vfs):
+def run_repl(vfs):
     """Интерактивный цикл: приглашение, ввод, выполнение команды."""
     while True:
         try:
-            line = input(prompt)
+            line = input(get_prompt(vfs))
         except EOFError:
             print("exit")
             return
@@ -239,8 +375,16 @@ def run_repl(prompt, vfs):
         run_line(line, vfs)
 
 
+def make_output_safe():
+    """Заменяет символы, которых нет в кодировке вывода, чтобы не падать."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+
 def main():
     """Точка входа: параметры, VFS, скрипт, затем интерактивный режим."""
+    make_output_safe()
     args = parse_args()
     print(BANNER)
     file_data = read_config(args.config) if args.config else {}
@@ -249,10 +393,9 @@ def main():
     vfs = load_vfs(settings["vfs"]) if settings["vfs"] else None
     if vfs:
         print("VFS loaded:", vfs_summary(vfs))
-    prompt = get_prompt()
     if settings["script"]:
-        run_script(settings["script"], prompt, vfs)
-    run_repl(prompt, vfs)
+        run_script(settings["script"], vfs)
+    run_repl(vfs)
 
 
 if __name__ == "__main__":
