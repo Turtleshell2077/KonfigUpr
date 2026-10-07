@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vfs name="stage5">
+  <dir name="docs">
+    <file name="a.txt">first</file>
+    <file name="b.txt">second</file>
+  </dir>
+  <dir name="empty1"/>
+  <dir name="empty2"/>
+  <dir name="nested">
+    <dir name="inner">
+      <file name="deep.txt">deep</file>
+    </dir>
+  </dir>
+  <file name="old.txt">old</file>
+  <file name="readme.txt">stage 5</file>
+</vfs>

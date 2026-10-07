@@ -1,7 +1,7 @@
 # Эмулятор командной оболочки (вариант 14)
 
 Практическая работа № 1 по дисциплине «Конфигурационное управление» (РТУ МИРЭА, ИКБО-10-25).
-Готовы этапы 1–4: REPL, конфигурация, VFS, основные команды. Дальше: этап 5 — `rmdir` и `rm`.
+Готовы все этапы: 1 — REPL, 2 — конфигурация, 3 — VFS, 4 — основные команды, 5 — команды `rmdir` и `rm`.
 
 ## 1. Общее описание
 
@@ -21,9 +21,11 @@
   `vfs-info` показывает загруженную VFS. Об ошибках загрузки (нет файла, неверный формат) программа сообщает.
 - Команды `ls` и `cd` ходят по папкам VFS, команды `tac` и `rev` читают файлы VFS, `whoami` печатает имя
   пользователя, `exit` завершает работу. Неизвестная команда даёт сообщение `command not found`.
+- Команды `rmdir` и `rm` удаляют папки и файлы из VFS, но только в памяти: XML-файл на диске не меняется.
 
 Эмулятор читает только файлы, которые ему указали (конфиг, скрипт, XML-файл VFS), и ничего не записывает на диск.
-Содержимое VFS не распаковывается и не изменяется: всё хранится в памяти, команды только читают его.
+Содержимое VFS не распаковывается на диск: всё хранится в памяти. Команды `ls`, `cd`, `tac`, `rev` только читают
+VFS, а `rmdir` и `rm` меняют её дерево в памяти. Чтобы вернуть удалённое, достаточно запустить эмулятор заново.
 
 ## 2. Описание функций и настроек
 
@@ -76,8 +78,9 @@ script: examples/start_b.txt
 байты). Имя `<vfs>` по умолчанию `vfs`. Текущая папка эмулятора хранится отдельно и сначала равна корню.
 
 Примеры в `examples/vfs/`: `minimal.xml` (только корень), `files.xml` (несколько файлов в одной папке),
-`sample.xml` (три уровня папок, многострочный текстовый файл и двоичный файл), а также сломанные `bad_syntax.xml`
-(не XML) и `bad_format.xml` (неверная структура).
+`sample.xml` (три уровня папок, многострочный текстовый файл и двоичный файл), `stage5.xml` (пустые папки, папка
+с вложенной папкой и файлы для проверки `rmdir` и `rm`), а также сломанные `bad_syntax.xml` (не XML) и
+`bad_format.xml` (неверная структура).
 
 ### Стартовый скрипт
 
@@ -90,13 +93,14 @@ script: examples/start_b.txt
 - Если скрипт закончился без `exit`, программа остаётся в интерактивном режиме.
 
 Скрипты в `examples/`: `stage4.txt` проверяет все режимы команд этапа 4 (включая ошибки, запускать с
-`examples/vfs/sample.xml`), `all_commands.txt` — краткий обход всех команд, работает с любой VFS и без неё,
-`show_vfs.txt` — только `vfs-info`, `start_a.txt` и `start_b.txt` — короткие скрипты для проверки параметров.
+`examples/vfs/sample.xml`), `stage5.txt` — все режимы `rmdir` и `rm` (запускать с `examples/vfs/stage5.xml`),
+`all_commands.txt` — краткий обход всех команд, работает с любой VFS и без неё, `show_vfs.txt` — только
+`vfs-info`, `start_a.txt` и `start_b.txt` — короткие скрипты для проверки параметров.
 
 ### Команды эмулятора
 
-Все сообщения команд печатаются в стандартный вывод. Без загруженной VFS команды `ls`, `cd`, `tac`, `rev` и
-`vfs-info` отвечают `имя: no VFS loaded (use --vfs or the config file)`.
+Все сообщения команд печатаются в стандартный вывод. Без загруженной VFS команды `ls`, `cd`, `tac`, `rev`, `rmdir`,
+`rm` и `vfs-info` отвечают `имя: no VFS loaded (use --vfs or the config file)`.
 
 | Команда | Что делает |
 |---|---|
@@ -105,6 +109,8 @@ script: examples/start_b.txt
 | `tac файл...` | Строки файла в обратном порядке |
 | `rev файл...` | Каждая строка файла наоборот (справа налево) |
 | `whoami` | Имя текущего пользователя (то же, что в приглашении) |
+| `rmdir папка...` | Удаляет пустые папки (только в памяти) |
+| `rm [-r] путь...` | Удаляет файлы; с `-r` (или `-R`) и папки вместе с содержимым (только в памяти) |
 | `vfs-info` | Служебная команда: имя VFS, число папок и файлов, дерево с размерами |
 | `exit` | Завершает работу эмулятора |
 
@@ -126,6 +132,18 @@ script: examples/start_b.txt
     `команда: путь: No such file or directory`, `команда: путь: Is a directory`, `команда: путь: not a text file`.
 - `whoami`
   - режим: без аргументов; ошибка: `whoami: extra operand 'x'`.
+- `rmdir`
+  - режимы: одна папка или несколько сразу (путь абсолютный или относительный); папка должна быть пустой;
+  - ошибки: `rmdir: failed to remove 'путь': причина`, где причина — `No such file or directory`, `Not a directory`,
+    `Directory not empty` или `Device or resource busy`; `rmdir: missing operand`; `rmdir: invalid option -- 'p'`.
+- `rm`
+  - режимы: один или несколько файлов; `-r` или `-R` — папки вместе с содержимым (в том числе пустые);
+    ошибка в одном пути не мешает удалить остальные;
+  - ошибки: `rm: cannot remove 'путь': причина`, где причина — `No such file or directory`, `Is a directory`
+    (папка без `-r`) или `Device or resource busy`; `rm: missing operand`; `rm: invalid option -- 'x'`.
+
+Текущую папку и её родителей (включая корень) удалить нельзя: ответ `Device or resource busy`. Так текущая папка
+всегда остаётся существующей.
 
 Двоичный файл (не UTF-8) команды `tac` и `rev` не читают и сообщают `not a text file`. `Ctrl+D` (в Windows
 `Ctrl+Z`, затем `Enter`) завершает работу, `Ctrl+C` сбрасывает текущую строку (в некоторых консолях Windows Python
@@ -165,7 +183,8 @@ script: examples/start_b.txt
 | `find_node(vfs, parts)` | Находит папку (словарь) или файл (байты) по списку имён, иначе `None` |
 | `parse_line(line)` | Делит строку на команду и аргументы, отбрасывает комментарий |
 | `need_vfs(name, vfs)` | Проверяет, что VFS загружена; иначе печатает сообщение |
-| `split_args(args)` | Делит аргументы команды на параметры (`-l`) и пути |
+| `split_args(args)` | Делит аргументы команды на параметры (начинаются с `-`) и пути |
+| `options_ok(command, options, allowed)` | Проверяет параметры команды; неизвестный — сообщение об ошибке |
 | `entry_line(name, node, long_format)` | Строка вывода `ls` для одного элемента |
 | `list_path(vfs, path, long_format)` | Печатает содержимое папки или строку для файла (для `ls`) |
 | `cmd_ls`, `cmd_cd` | Команды `ls` и `cd` |
@@ -173,6 +192,11 @@ script: examples/start_b.txt
 | `run_on_files(command, args, vfs, transform)` | Общая часть `tac` и `rev`: читает файлы и печатает результат |
 | `reverse_lines(lines)`, `reverse_each(lines)` | Преобразования для `tac` и `rev` |
 | `cmd_tac`, `cmd_rev`, `cmd_whoami` | Команды `tac`, `rev` и `whoami` |
+| `is_busy(vfs, parts)` | Путь занят: это текущая папка или одна из её родительских |
+| `delete_node(vfs, parts)` | Удаляет элемент из дерева VFS в памяти |
+| `remove_dir(vfs, path)` | Удаляет пустую папку (для `rmdir`); при ошибке печатает причину |
+| `remove_path(vfs, path, recursive)` | Удаляет файл или (с `-r`) папку (для `rm`); при ошибке печатает причину |
+| `cmd_rmdir`, `cmd_rm` | Команды `rmdir` и `rm` |
 | `cmd_exit`, `cmd_vfs_info` | Команды `exit` и `vfs-info` |
 | `run_line(line, vfs)` | Разбирает строку и выполняет команду |
 | `run_script(path, vfs)` | Выполняет скрипт, показывая ввод и вывод как диалог |
@@ -216,12 +240,129 @@ python -m unittest -v
 | `test_all_commands.bat` | Краткий скрипт со всеми командами на трёх видах VFS и без VFS |
 | `test_vfs_errors.bat` | Ошибки VFS: нет файла, не XML, неверный формат; затем три корректные VFS |
 | `test_stage4.bat` | Все режимы `ls`, `cd`, `tac`, `rev`, `whoami` (скрипт `stage4.txt`) с VFS и без неё |
+| `test_stage5.bat` | Все режимы `rmdir` и `rm` (скрипт `stage5.txt`); второй запуск доказывает, что XML не изменился |
 
 ```
 .\scripts\test_params.bat
 .\scripts\test_vfs.bat
 .\scripts\test_stage4.bat
+.\scripts\test_stage5.bat
 ```
+
+### Команды для проверки каждого этапа
+
+Запуск делается из корня проекта. Строки без `.\run.bat` вводятся внутри эмулятора, после приглашения. Выход: `exit`.
+
+**Этап 1 — REPL.** Запуск без параметров, внутри можно ввести `foo` (ответ `command not found`) и `exit`:
+
+```
+.\run.bat
+```
+
+**Этап 2 — параметры и конфиг.** Скрипт из командной строки; всё из конфига; значения конфига важнее командной
+строки; `vfs` из конфига, а скрипт из командной строки:
+
+```
+.\run.bat --script examples/start_a.txt
+.\run.bat --config examples/config_full.yaml
+.\run.bat --vfs examples/vfs/minimal.xml --script examples/start_a.txt --config examples/config_full.yaml
+.\run.bat --vfs examples/vfs/minimal.xml --script examples/start_a.txt --config examples/config_vfs_only.yaml
+```
+
+Ошибки (коды завершения 1, 1, 1 и 2):
+
+```
+.\run.bat --config nope.yaml
+.\run.bat --config examples/config_bad_syntax.yaml
+.\run.bat --script nope.txt
+.\run.bat --unknown
+```
+
+**Этап 3 — VFS.** Три вида VFS (минимальная, с несколькими файлами, с вложенными папками), внутри команда
+`vfs-info`; в последней строке VFS вместе со скриптом, проверяющим все команды:
+
+```
+.\run.bat --vfs examples/vfs/minimal.xml
+.\run.bat --vfs examples/vfs/files.xml
+.\run.bat --vfs examples/vfs/sample.xml
+.\run.bat --vfs examples/vfs/sample.xml --script examples/all_commands.txt
+```
+
+Ошибки загрузки (код завершения 1): нет файла, не XML, неверный формат:
+
+```
+.\run.bat --vfs examples/vfs/missing.xml
+.\run.bat --vfs examples/vfs/bad_syntax.xml
+.\run.bat --vfs examples/vfs/bad_format.xml
+```
+
+**Этап 4 — `ls`, `cd`, `tac`, `rev`, `whoami`.** Все режимы скриптом, или вручную на `sample.xml`:
+
+```
+.\run.bat --vfs examples/vfs/sample.xml --script examples/stage4.txt
+.\run.bat --vfs examples/vfs/sample.xml
+```
+
+Команды для ручного ввода (первая строка папка, вторая с `-l`, третья несколько путей):
+
+```
+ls
+ls -l /home/user
+ls /home /home/user/docs
+cd /home/user
+cd docs
+cd ..
+cd
+tac /home/user/docs/todo.txt
+rev /home/user/notes.txt
+whoami
+```
+
+Ошибки (нет пути, неверный параметр, файл вместо папки, лишний аргумент, нет файла, не текст):
+
+```
+ls /nope
+ls -x
+cd /readme.txt
+cd a b
+tac
+rev /home/user/data.bin
+whoami x
+```
+
+**Этап 5 — `rmdir`, `rm`.** Все режимы скриптом, или вручную на `stage5.xml`:
+
+```
+.\run.bat --vfs examples/vfs/stage5.xml --script examples/stage5.txt
+.\run.bat --vfs examples/vfs/stage5.xml
+```
+
+Команды для ручного ввода (удаление файла, нескольких файлов, нескольких пустых папок, папки с `-R` и `-r`):
+
+```
+vfs-info
+rm old.txt
+rm docs/a.txt docs/b.txt
+rmdir empty1 docs
+rm -R empty2
+rm -r nested
+vfs-info
+```
+
+Ошибки (запустите эмулятор заново, чтобы всё удалённое вернулось):
+
+```
+rm docs
+rmdir nested
+rmdir readme.txt
+rm
+rmdir -p x
+cd empty1
+rmdir .
+```
+
+Все эти запуски собраны и в готовых скриптах из таблицы выше (`scripts/test_stage4.bat`, `scripts/test_stage5.bat` и
+другие).
 
 ## 4. Примеры использования
 
@@ -291,10 +432,50 @@ alice@workstation:/$ tac readme.txt
 sample VFS
 alice@workstation:/$ rev readme.txt
 SFV elpmas
+alice@workstation:/$ rm readme.txt
+alice@workstation:/$ rmdir nope
+rmdir: failed to remove 'nope': No such file or directory
+alice@workstation:/$ ls
+home/
 alice@workstation:/$ foo bar
 foo: command not found
 alice@workstation:/$ exit
 ```
+
+Команды этапа 5 (`.\run.bat --vfs examples/vfs/stage5.xml`, затем эти команды). VFS меняется только в памяти:
+`rm` без `-r` не удаляет папку, `rmdir` удаляет только пустую, текущую папку удалить нельзя:
+
+```
+VFS loaded: stage5 (folders: 5, files: 5)
+alice@workstation:/$ ls
+docs/
+empty1/
+empty2/
+nested/
+old.txt
+readme.txt
+alice@workstation:/$ rm old.txt
+alice@workstation:/$ rm docs
+rm: cannot remove 'docs': Is a directory
+alice@workstation:/$ rmdir docs
+rmdir: failed to remove 'docs': Directory not empty
+alice@workstation:/$ rm docs/a.txt docs/b.txt
+alice@workstation:/$ rmdir empty1 docs
+alice@workstation:/$ cd empty2
+alice@workstation:/empty2$ rmdir .
+rmdir: failed to remove '.': Device or resource busy
+alice@workstation:/empty2$ cd /
+alice@workstation:/$ rm -r nested
+alice@workstation:/$ vfs-info
+VFS: stage5 (folders: 1, files: 1)
+/
+  empty2/
+  readme.txt (7 bytes)
+alice@workstation:/$ exit
+```
+
+Все режимы и ошибки `rmdir` и `rm` собраны в скрипте `examples/stage5.txt`
+(`.\run.bat --vfs examples/vfs/stage5.xml --script examples/stage5.txt`).
 
 Без VFS команды отвечают, что она не загружена (`.\run.bat`, затем команды), а `whoami` работает:
 

@@ -17,6 +17,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PROGRAM = ROOT / "src" / "emulator.py"
 MINIMAL = "examples/vfs/minimal.xml"
 SAMPLE = "examples/vfs/sample.xml"
+STAGE5 = "examples/vfs/stage5.xml"
 NO_VFS = "no VFS loaded (use --vfs or the config file)"
 TODO = b"write the report\ncheck the code\nsend to teacher"
 
@@ -269,13 +270,81 @@ class TacRevWhoamiTests(unittest.TestCase):
         self.assertEqual(run("whoami now"), "whoami: extra operand 'now'\n")
 
 
+class RmdirRmTests(unittest.TestCase):
+    """Команды rmdir и rm: меняют только VFS в памяти."""
+
+    def test_rmdir(self):
+        """rmdir удаляет пустые папки (сразу несколько), сообщает ошибки."""
+        vfs = small_vfs()
+        vfs["root"]["e1"] = {}
+        self.assertEqual(run("rmdir e1 home/user/docs", vfs), "")
+        self.assertEqual(sorted(vfs["root"]), ["home", "readme.txt"])
+        self.assertEqual(sorted(vfs["root"]["home"]["user"]),
+                         ["a.txt", "bin"])
+        head = "rmdir: failed to remove"
+        for line, text in (
+                ("rmdir home", f"{head} 'home': Directory not empty"),
+                ("rmdir readme.txt", f"{head} 'readme.txt': Not a directory"),
+                ("rmdir nope", f"{head} 'nope': No such file or directory"),
+                ("rmdir", "rmdir: missing operand"),
+                ("rmdir -p home", "rmdir: invalid option -- 'p'")):
+            with self.subTest(line=line):
+                self.assertEqual(run(line, vfs), text + "\n")
+
+    def test_rm(self):
+        """rm удаляет файлы, с -r и -R папки; ошибки не мешают остальным."""
+        vfs = small_vfs()
+        out = run("rm readme.txt nope home/user/a.txt", vfs)
+        self.assertEqual(
+            out, "rm: cannot remove 'nope': No such file or directory\n")
+        self.assertNotIn("readme.txt", vfs["root"])
+        self.assertNotIn("a.txt", vfs["root"]["home"]["user"])
+        self.assertEqual(run("rm -R home/user/docs", vfs), "")
+        self.assertEqual(run("rm -r home", vfs), "")
+        self.assertEqual(vfs["root"], {})
+        for line, text in (
+                ("rm home", "rm: cannot remove 'home': Is a directory"),
+                ("rm", "rm: missing operand"),
+                ("rm -x home", "rm: invalid option -- 'x'")):
+            with self.subTest(line=line):
+                self.assertEqual(run(line, small_vfs()), text + "\n")
+
+    def test_current_folder_and_parents_are_busy(self):
+        """Текущую папку и её родителей удалить нельзя, VFS остаётся целой."""
+        vfs = small_vfs()
+        vfs["cwd"] = ["home", "user", "docs"]
+        before = copy.deepcopy(vfs["root"])
+        for line in ("rmdir .", "rmdir /home/user/docs", "rm -r ..",
+                     "rm -r ../..", "rm -r /home", "rm -r /"):
+            with self.subTest(line=line):
+                self.assertIn("Device or resource busy", run(line, vfs))
+        self.assertEqual(vfs["root"], before)
+        self.assertIsInstance(emulator.find_node(vfs, vfs["cwd"]), dict)
+
+    def test_changes_only_memory(self):
+        """Удаление не меняет XML-файл на диске: новая загрузка даёт всё."""
+        with tempfile.TemporaryDirectory() as folder:
+            body = pathlib.Path(STAGE5).read_text(encoding="utf-8")
+            path = pathlib.Path(make_file(folder, "vfs.xml", body))
+            before = (path.read_bytes(), sorted(os.listdir(folder)))
+            vfs = emulator.load_vfs(str(path))
+            for line in ("rm -r nested", "rm old.txt", "rmdir empty1"):
+                run(line, vfs)
+            after = (path.read_bytes(), sorted(os.listdir(folder)))
+            fresh = emulator.load_vfs(str(path))
+        self.assertEqual(before, after)
+        self.assertEqual(emulator.count_nodes(fresh["root"]), (5, 5))
+        self.assertEqual(emulator.count_nodes(vfs["root"]), (2, 3))
+
+
 class VfsUsageTests(unittest.TestCase):
     """Работа команд без VFS и неизменность VFS."""
 
     def test_commands_without_vfs(self):
         """Без VFS команды сообщают, что VFS не загружена."""
         for line, name in (("ls", "ls"), ("cd /", "cd"), ("tac x", "tac"),
-                           ("rev x", "rev"), ("vfs-info", "vfs-info")):
+                           ("rev x", "rev"), ("rm x", "rm"),
+                           ("rmdir x", "rmdir"), ("vfs-info", "vfs-info")):
             with self.subTest(line=line):
                 self.assertEqual(run(line), f"{name}: {NO_VFS}\n")
 
@@ -594,6 +663,27 @@ class ProgramTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         self.assertIn(f"ls: {NO_VFS}", result.stdout)
         self.assertIn(f"tac: {NO_VFS}", result.stdout)
+
+    def test_stage5_script(self):
+        """Скрипт этапа 5: удаления и ошибки; второй запуск даёт то же."""
+        args = ["--vfs", STAGE5, "--script", "examples/stage5.txt"]
+        first = start_program(args)
+        second = start_program(args)
+        self.assertEqual(first.returncode, 0)
+        self.assertEqual(first.stderr, "")
+        self.assertEqual(first.stdout, second.stdout)
+        for text in ("rmdir: failed to remove 'docs': Directory not empty",
+                     "rmdir: failed to remove 'readme.txt': Not a directory",
+                     "rm: cannot remove 'docs': Is a directory",
+                     "rm: cannot remove 'nope.txt': No such file",
+                     "rm: invalid option -- 'x'",
+                     "rm: cannot remove '/': Device or resource busy",
+                     "VFS: stage5 (folders: 5, files: 5)",
+                     "VFS: stage5 (folders: 0, files: 1)"):
+            self.assertIn(text, first.stdout)
+        without = start_program(["--script", "examples/stage5.txt"])
+        self.assertEqual(without.returncode, 0)
+        self.assertIn(f"rm: {NO_VFS}", without.stdout)
 
     def test_all_commands_script_with_and_without_vfs(self):
         """Краткий скрипт со всеми командами работает с любой VFS и без."""

@@ -1,0 +1,45 @@
+# Stage 5 start script: rmdir and rm
+# Use it with the VFS examples/vfs/stage5.xml
+# The VFS changes only in memory, the XML file on the disk stays the same
+
+# the tree before the changes
+vfs-info
+
+# rmdir errors: not empty, not a folder, no such path, no operand, bad option
+rmdir docs
+rmdir readme.txt
+rmdir nope
+rmdir
+rmdir -p docs
+
+# rm errors: a folder without -r, no such path, no operand, bad option
+rm docs
+rm nope
+rm
+rm -x readme.txt
+
+# the current folder and its parents cannot be removed
+cd empty1
+rmdir .
+rm -r ..
+rm -r /
+cd /
+
+# rm removes files: one file, several files (the missing one is reported)
+rm old.txt
+rm docs/a.txt nope.txt docs/b.txt
+ls docs
+
+# rmdir removes empty folders: one or several at once
+rmdir empty1 docs
+# rm -r (or -R) removes a folder, also an empty one
+rm -R empty2
+ls
+
+# rm -r removes a folder with everything inside
+rm -r nested
+ls
+
+# the tree after the changes
+vfs-info
+exit

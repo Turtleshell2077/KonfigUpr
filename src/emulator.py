@@ -210,6 +210,15 @@ def split_args(args):
     return options, paths
 
 
+def options_ok(command, options, allowed):
+    """Проверяет параметры команды; неизвестный — ошибка, результат False."""
+    for option in options:
+        if option not in allowed:
+            print(f"{command}: invalid option -- '{option.lstrip('-')}'")
+            return False
+    return True
+
+
 def entry_line(name, node, long_format):
     """Строка для ls: имя (у папок со знаком /), с -l ещё тип и размер."""
     is_dir = isinstance(node, dict)
@@ -237,10 +246,8 @@ def cmd_ls(args, vfs):
     if not need_vfs("ls", vfs):
         return
     options, paths = split_args(args)
-    for option in options:
-        if option != "-l":
-            print(f"ls: invalid option -- '{option.lstrip('-')}'")
-            return
+    if not options_ok("ls", options, ("-l",)):
+        return
     for number, path in enumerate(paths or ["."]):
         if paths[1:]:
             print(("\n" if number else "") + f"{path}:")
@@ -320,6 +327,78 @@ def cmd_whoami(args, _vfs):
         print(getpass.getuser())
 
 
+def is_busy(vfs, parts):
+    """Путь занят: это текущая папка или одна из её родительских."""
+    return vfs["cwd"][:len(parts)] == parts
+
+
+def delete_node(vfs, parts):
+    """Удаляет из дерева VFS элемент по списку имён (только в памяти)."""
+    del find_node(vfs, parts[:-1])[parts[-1]]
+
+
+def remove_dir(vfs, path):
+    """Удаляет пустую папку (для rmdir); при ошибке печатает причину."""
+    parts = resolve_path(vfs, path)
+    node = find_node(vfs, parts)
+    problem = None
+    if node is None:
+        problem = "No such file or directory"
+    elif not isinstance(node, dict):
+        problem = "Not a directory"
+    elif node:
+        problem = "Directory not empty"
+    elif is_busy(vfs, parts):
+        problem = "Device or resource busy"
+    if problem:
+        print(f"rmdir: failed to remove '{path}': {problem}")
+    else:
+        delete_node(vfs, parts)
+
+
+def remove_path(vfs, path, recursive):
+    """Удаляет файл (с -r и папку) из VFS (для rm); при ошибке печатает её."""
+    parts = resolve_path(vfs, path)
+    node = find_node(vfs, parts)
+    problem = None
+    if node is None:
+        problem = "No such file or directory"
+    elif isinstance(node, dict) and not recursive:
+        problem = "Is a directory"
+    elif is_busy(vfs, parts):
+        problem = "Device or resource busy"
+    if problem:
+        print(f"rm: cannot remove '{path}': {problem}")
+    else:
+        delete_node(vfs, parts)
+
+
+def cmd_rmdir(args, vfs):
+    """Команда rmdir папка...: удаляет пустые папки (только в памяти)."""
+    if not need_vfs("rmdir", vfs):
+        return
+    options, paths = split_args(args)
+    if not options_ok("rmdir", options, ()):
+        return
+    if not paths:
+        print("rmdir: missing operand")
+    for path in paths:
+        remove_dir(vfs, path)
+
+
+def cmd_rm(args, vfs):
+    """Команда rm [-r] путь...: удаляет файлы, с -r и папки (в памяти)."""
+    if not need_vfs("rm", vfs):
+        return
+    options, paths = split_args(args)
+    if not options_ok("rm", options, ("-r", "-R")):
+        return
+    if not paths:
+        print("rm: missing operand")
+    for path in paths:
+        remove_path(vfs, path, bool(options))
+
+
 def cmd_exit(_args, _vfs):
     """Завершает работу эмулятора."""
     sys.exit()
@@ -336,7 +415,8 @@ def cmd_vfs_info(_args, vfs):
 
 
 COMMANDS = {"ls": cmd_ls, "cd": cmd_cd, "tac": cmd_tac, "rev": cmd_rev,
-            "whoami": cmd_whoami, "exit": cmd_exit, "vfs-info": cmd_vfs_info}
+            "whoami": cmd_whoami, "rmdir": cmd_rmdir, "rm": cmd_rm,
+            "exit": cmd_exit, "vfs-info": cmd_vfs_info}
 
 
 def run_line(line, vfs):

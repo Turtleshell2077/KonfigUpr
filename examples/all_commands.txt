@@ -12,6 +12,11 @@ cd ..
 tac readme.txt
 rev readme.txt
 
+# rm and rmdir change the VFS only in memory
+rm readme.txt
+rmdir nope
+ls
+
 # a comment after a command is ignored
 ls /   # this part is ignored
 
