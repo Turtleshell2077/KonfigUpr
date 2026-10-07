@@ -4,6 +4,47 @@
     <dir name="user">
       <file name="notes.txt">hello</file>
       <file name="data.bin" encoding="base64">//79/Ps=</file>
+      <file name=".profile">export EDITOR=nano</file>
+      <file name="report.txt">report line 01: all checks are passed ok
+report line 02: all checks are passed ok
+report line 03: all checks are passed ok
+report line 04: all checks are passed ok
+report line 05: all checks are passed ok
+report line 06: all checks are passed ok
+report line 07: all checks are passed ok
+report line 08: all checks are passed ok
+report line 09: all checks are passed ok
+report line 10: all checks are passed ok
+report line 11: all checks are passed ok
+report line 12: all checks are passed ok
+report line 13: all checks are passed ok
+report line 14: all checks are passed ok
+report line 15: all checks are passed ok
+report line 16: all checks are passed ok
+report line 17: all checks are passed ok
+report line 18: all checks are passed ok
+report line 19: all checks are passed ok
+report line 20: all checks are passed ok
+report line 21: all checks are passed ok
+report line 22: all checks are passed ok
+report line 23: all checks are passed ok
+report line 24: all checks are passed ok
+report line 25: all checks are passed ok
+report line 26: all checks are passed ok
+report line 27: all checks are passed ok
+report line 28: all checks are passed ok
+report line 29: all checks are passed ok
+report line 30: all checks are passed ok
+report line 31: all checks are passed ok
+report line 32: all checks are passed ok
+report line 33: all checks are passed ok
+report line 34: all checks are passed ok
+report line 35: all checks are passed ok
+report line 36: all checks are passed ok
+report line 37: all checks are passed ok
+report line 38: all checks are passed ok
+report line 39: all checks are passed ok
+report line 40: all checks are passed ok</file>
       <dir name="docs">
         <file name="todo.txt">write the report
 check the code

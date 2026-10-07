@@ -16,6 +16,8 @@ except ImportError:
 BANNER = "=== Virtual machine: shell emulator ==="
 SETTINGS = ("vfs", "script")
 NO_VFS = "no VFS loaded (use --vfs or the config file)"
+KILO = 1024
+SIZE_UNITS = ("K", "M", "G")
 
 
 def get_prompt(vfs=None):
@@ -203,55 +205,93 @@ def need_vfs(name, vfs):
     return vfs is not None
 
 
+def is_option(arg):
+    """Параметр — это аргумент вида -x; одиночный дефис считается путём."""
+    return arg.startswith("-") and arg != "-"
+
+
 def split_args(args):
-    """Делит аргументы на параметры (начинаются с -) и пути."""
-    options = [arg for arg in args if arg.startswith("-")]
-    paths = [arg for arg in args if not arg.startswith("-")]
+    """Делит аргументы на параметры (вида -x) и пути."""
+    options = [arg for arg in args if is_option(arg)]
+    paths = [arg for arg in args if not is_option(arg)]
     return options, paths
 
 
 def options_ok(command, options, allowed):
-    """Проверяет параметры команды; неизвестный — ошибка, результат False."""
+    """Проверяет буквы параметров (-lah) по строке allowed; иначе ошибка."""
     for option in options:
-        if option not in allowed:
-            print(f"{command}: invalid option -- '{option.lstrip('-')}'")
+        if option.startswith("--"):
+            print(f"{command}: unrecognized option '{option}'")
             return False
+        for letter in option[1:]:
+            if letter not in allowed:
+                print(f"{command}: invalid option -- '{letter}'")
+                return False
     return True
 
 
-def entry_line(name, node, long_format):
-    """Строка для ls: имя (у папок со знаком /), с -l ещё тип и размер."""
+def option_letters(options):
+    """Множество букв из всех параметров: ['-l', '-ah'] -> {'l', 'a', 'h'}."""
+    return {letter for option in options for letter in option[1:]}
+
+
+def human_size(size):
+    """Размер в читаемом виде: 5, 1.5K, 2.0M."""
+    if size < KILO:
+        return str(size)
+    value = float(size)
+    for unit in SIZE_UNITS[:-1]:
+        value /= KILO
+        if value < KILO:
+            return f"{value:.1f}{unit}"
+    return f"{value / KILO:.1f}{SIZE_UNITS[-1]}"
+
+
+def dir_entries(directory, show_all):
+    """Элементы папки для ls: скрытые (с точки) только с -a, вместе с . и .."""
+    entries = [(name, directory[name]) for name in sorted(directory)
+               if show_all or not name.startswith(".")]
+    if show_all:
+        entries = [(".", directory), ("..", directory)] + entries
+    return entries
+
+
+def entry_line(name, node, flags):
+    """Строка для ls: имя (у папок /); с -l ещё тип и размер (с -h: K, M)."""
     is_dir = isinstance(node, dict)
     shown = name + "/" if is_dir else name
-    if not long_format:
+    if "l" not in flags:
         return shown
     size = "-" if is_dir else str(len(node))
+    if "h" in flags and not is_dir:
+        size = human_size(len(node))
     return f"{'d' if is_dir else '-'} {size:>8} {shown}"
 
 
-def list_path(vfs, path, long_format):
+def list_path(vfs, path, flags):
     """Печатает содержимое папки или строку для файла (команда ls)."""
     node = find_node(vfs, resolve_path(vfs, path))
     if node is None:
         print(f"ls: cannot access '{path}': No such file or directory")
     elif isinstance(node, dict):
-        for name in sorted(node):
-            print(entry_line(name, node[name], long_format))
+        for name, child in dir_entries(node, "a" in flags):
+            print(entry_line(name, child, flags))
     else:
-        print(entry_line(path, node, long_format))
+        print(entry_line(path, node, flags))
 
 
 def cmd_ls(args, vfs):
-    """Команда ls [-l] [путь...]: содержимое папки или сведения о файле."""
+    """Команда ls [-lah] [путь...]: содержимое папки или сведения о файле."""
     if not need_vfs("ls", vfs):
         return
     options, paths = split_args(args)
-    if not options_ok("ls", options, ("-l",)):
+    if not options_ok("ls", options, "lah"):
         return
+    flags = option_letters(options)
     for number, path in enumerate(paths or ["."]):
         if paths[1:]:
             print(("\n" if number else "") + f"{path}:")
-        list_path(vfs, path, bool(options))
+        list_path(vfs, path, flags)
 
 
 def cmd_cd(args, vfs):
@@ -378,7 +418,7 @@ def cmd_rmdir(args, vfs):
     if not need_vfs("rmdir", vfs):
         return
     options, paths = split_args(args)
-    if not options_ok("rmdir", options, ()):
+    if not options_ok("rmdir", options, ""):
         return
     if not paths:
         print("rmdir: missing operand")
@@ -391,7 +431,7 @@ def cmd_rm(args, vfs):
     if not need_vfs("rm", vfs):
         return
     options, paths = split_args(args)
-    if not options_ok("rm", options, ("-r", "-R")):
+    if not options_ok("rm", options, "rR"):
         return
     if not paths:
         print("rm: missing operand")

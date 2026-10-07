@@ -180,13 +180,52 @@ class LsTests(unittest.TestCase):
         self.assertEqual(out, "/home:\nuser/\n\n/home/user/docs:\n\n"
                               "readme.txt:\nreadme.txt\n")
 
+    def test_all_option(self):
+        """-a показывает скрытые имена (с точки), . и ..; без -a их нет."""
+        vfs = small_vfs()
+        vfs["root"]["home"]["user"][".profile"] = b"x"
+        self.assertEqual(run("ls /home/user", vfs), "a.txt\nbin\ndocs/\n")
+        self.assertEqual(run("ls -a /home/user", vfs),
+                         "./\n../\n.profile\na.txt\nbin\ndocs/\n")
+        self.assertEqual(run("ls /home/user/.profile", vfs),
+                         "/home/user/.profile\n")
+
+    def test_human_option(self):
+        """-h с -l печатает размеры как 1.5K и 2.0M; параметры объединяются."""
+        vfs = small_vfs()
+        user = vfs["root"]["home"]["user"]
+        user["big.txt"] = b"a" * 1536
+        user["huge.bin"] = b"a" * 2097152
+        user[".profile"] = b"x"
+        out = run("ls -lh /home/user", vfs)
+        self.assertIn("      14 a.txt\n", out)
+        self.assertIn("     1.5K big.txt\n", out)
+        self.assertIn("     2.0M huge.bin\n", out)
+        self.assertNotIn(".profile", out)
+        self.assertEqual(run("ls -hl /home/user", vfs), out)
+        everything = run("ls -lah /home/user", vfs)
+        self.assertIn("d        - ./\n", everything)
+        self.assertIn("-        1 .profile\n", everything)
+        self.assertEqual(run("ls -h /home/user", vfs),
+                         run("ls /home/user", vfs))
+        sizes = ((0, "0"), (1023, "1023"), (1024, "1.0K"), (1536, "1.5K"),
+                 (1048576, "1.0M"), (1073741824, "1.0G"))
+        for size, text in sizes:
+            with self.subTest(size=size):
+                self.assertEqual(emulator.human_size(size), text)
+
     def test_errors(self):
-        """Несуществующий путь и неизвестный параметр."""
+        """Несуществующий путь, неизвестный параметр или буква в группе."""
         vfs = small_vfs()
         self.assertEqual(
             run("ls /nope", vfs),
             "ls: cannot access '/nope': No such file or directory\n")
         self.assertEqual(run("ls -x", vfs), "ls: invalid option -- 'x'\n")
+        self.assertEqual(run("ls -lx", vfs), "ls: invalid option -- 'x'\n")
+        self.assertEqual(run("ls --all", vfs),
+                         "ls: unrecognized option '--all'\n")
+        self.assertEqual(run("ls -", vfs),
+                         "ls: cannot access '-': No such file or directory\n")
 
 
 class CdTests(unittest.TestCase):
@@ -505,7 +544,7 @@ class VfsInfoTests(unittest.TestCase):
     def test_count_and_tree(self):
         """Считаются папки и файлы; дерево с отступами и размерами."""
         root = emulator.load_vfs(SAMPLE)["root"]
-        self.assertEqual(emulator.count_nodes(root), (3, 4))
+        self.assertEqual(emulator.count_nodes(root), (3, 6))
         tree = {"a": {"b.txt": b"12"}, "c": b""}
         self.assertEqual(emulator.tree_lines(tree),
                          ["a/", "  b.txt (2 bytes)", "c (0 bytes)"])
@@ -513,7 +552,7 @@ class VfsInfoTests(unittest.TestCase):
     def test_vfs_info(self):
         """vfs-info показывает имя, число папок и файлов и дерево."""
         out = run("vfs-info", emulator.load_vfs(SAMPLE))
-        self.assertIn("VFS: sample (folders: 3, files: 4)", out)
+        self.assertIn("VFS: sample (folders: 3, files: 6)", out)
         self.assertIn("      docs/\n        todo.txt (47 bytes)\n", out)
 
 
@@ -616,7 +655,7 @@ class ProgramTests(unittest.TestCase):
         text = "vfs-info\ncd /home/user/docs\nls\ntac todo.txt\nexit\n"
         result = start_program(["--vfs", SAMPLE], text)
         self.assertEqual(result.returncode, 0)
-        self.assertIn("VFS loaded: sample (folders: 3, files: 4)",
+        self.assertIn("VFS loaded: sample (folders: 3, files: 6)",
                       result.stdout)
         self.assertIn("notes.txt (5 bytes)", result.stdout)
         self.assertIn(":/home/user/docs$ ", result.stdout)

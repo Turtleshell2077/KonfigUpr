@@ -78,9 +78,9 @@ script: examples/start_b.txt
 байты). Имя `<vfs>` по умолчанию `vfs`. Текущая папка эмулятора хранится отдельно и сначала равна корню.
 
 Примеры в `examples/vfs/`: `minimal.xml` (только корень), `files.xml` (несколько файлов в одной папке),
-`sample.xml` (три уровня папок, многострочный текстовый файл и двоичный файл), `stage5.xml` (пустые папки, папка
-с вложенной папкой и файлы для проверки `rmdir` и `rm`), а также сломанные `bad_syntax.xml` (не XML) и
-`bad_format.xml` (неверная структура).
+`sample.xml` (три уровня папок, многострочный и двоичный файлы, скрытый файл `.profile` и файл `report.txt`
+больше килобайта для проверки `ls -a` и `ls -h`), `stage5.xml` (пустые папки, папка с вложенной папкой и файлы для
+проверки `rmdir` и `rm`), а также сломанные `bad_syntax.xml` (не XML) и `bad_format.xml` (неверная структура).
 
 ### Стартовый скрипт
 
@@ -104,7 +104,7 @@ script: examples/start_b.txt
 
 | Команда | Что делает |
 |---|---|
-| `ls [-l] [путь...]` | Содержимое папки (по умолчанию текущей), по одному имени в строке, у папок знак `/` |
+| `ls [-lah] [путь...]` | Содержимое папки (по умолчанию текущей), по одному имени в строке, у папок знак `/` |
 | `cd [путь]` | Переход в папку; без пути — в корень VFS |
 | `tac файл...` | Строки файла в обратном порядке |
 | `rev файл...` | Каждая строка файла наоборот (справа налево) |
@@ -121,8 +121,12 @@ script: examples/start_b.txt
 
 - `ls`
   - режимы: без аргументов; путь к папке (абсолютный, относительный, `.`, `..`); путь к файлу (печатается его имя);
-    `-l` (тип `d` или `-`, размер в байтах, имя); несколько путей (перед каждым печатается его имя и `:`);
-  - ошибки: `ls: cannot access 'путь': No such file or directory`, `ls: invalid option -- 'x'`.
+    несколько путей (перед каждым печатается его имя и `:`);
+  - параметры (можно объединять: `-la`, `-lh`, `-lah`, в любом порядке): `-l` — тип (`d` или `-`), размер в байтах и
+    имя; `-a` — показать и скрытые имена (начинаются с точки), а также `.` и `..` (без `-a` скрытые не видны);
+    `-h` — вместе с `-l` размеры в читаемом виде (`5`, `1.6K`, `2.0M`); один `-h` без `-l` ничего не меняет;
+  - ошибки: `ls: cannot access 'путь': No such file or directory`, `ls: invalid option -- 'x'` (неизвестная буква,
+    в том числе внутри группы вроде `-lx`), `ls: unrecognized option '--all'`.
 - `cd`
   - режимы: абсолютный и относительный путь, `.`, `..`; без аргументов (переход в корень);
   - ошибки: `cd: путь: No such file or directory`, `cd: путь: Not a directory`, `cd: too many arguments`.
@@ -183,10 +187,14 @@ script: examples/start_b.txt
 | `find_node(vfs, parts)` | Находит папку (словарь) или файл (байты) по списку имён, иначе `None` |
 | `parse_line(line)` | Делит строку на команду и аргументы, отбрасывает комментарий |
 | `need_vfs(name, vfs)` | Проверяет, что VFS загружена; иначе печатает сообщение |
-| `split_args(args)` | Делит аргументы команды на параметры (начинаются с `-`) и пути |
-| `options_ok(command, options, allowed)` | Проверяет параметры команды; неизвестный — сообщение об ошибке |
-| `entry_line(name, node, long_format)` | Строка вывода `ls` для одного элемента |
-| `list_path(vfs, path, long_format)` | Печатает содержимое папки или строку для файла (для `ls`) |
+| `is_option(arg)` | Параметр — аргумент вида `-x`; одиночный `-` считается путём |
+| `split_args(args)` | Делит аргументы команды на параметры (вида `-x`) и пути |
+| `options_ok(command, options, allowed)` | Проверяет буквы параметров (`-lah`); неизвестная — сообщение об ошибке |
+| `option_letters(options)` | Множество букв из всех параметров: `['-l', '-ah']` → `{'l', 'a', 'h'}` |
+| `human_size(size)` | Размер в читаемом виде: `5`, `1.5K`, `2.0M` (для `ls -lh`) |
+| `dir_entries(directory, show_all)` | Элементы папки для `ls`: скрытые только с `-a`, с ними `.` и `..` |
+| `entry_line(name, node, flags)` | Строка вывода `ls` для одного элемента (флаги `l`, `h`) |
+| `list_path(vfs, path, flags)` | Печатает содержимое папки или строку для файла (для `ls`) |
 | `cmd_ls`, `cmd_cd` | Команды `ls` и `cd` |
 | `read_vfs_text(command, path, vfs)` | Читает файл VFS как текст; при ошибке печатает сообщение |
 | `run_on_files(command, args, vfs, transform)` | Общая часть `tac` и `rev`: читает файлы и печатает результат |
@@ -303,11 +311,14 @@ python -m unittest -v
 .\run.bat --vfs examples/vfs/sample.xml
 ```
 
-Команды для ручного ввода (первая строка папка, вторая с `-l`, третья несколько путей):
+Команды для ручного ввода (по порядку: папка; `-l`; скрытые `-a`; читаемые размеры `-h`; все вместе; несколько путей):
 
 ```
 ls
 ls -l /home/user
+ls -a /home/user
+ls -lh /home/user
+ls -lah /home/user
 ls /home /home/user/docs
 cd /home/user
 cd docs
@@ -318,11 +329,12 @@ rev /home/user/notes.txt
 whoami
 ```
 
-Ошибки (нет пути, неверный параметр, файл вместо папки, лишний аргумент, нет файла, не текст):
+Ошибки (нет пути, неверный параметр, неверная буква в группе, файл вместо папки, лишний аргумент, нет файла, не текст):
 
 ```
 ls /nope
 ls -x
+ls -lx
 cd /readme.txt
 cd a b
 tac
@@ -374,16 +386,39 @@ rmdir .
 [debug] command line: vfs=examples/vfs/sample.xml, script=demo.txt, config=None
 [debug] config file : {}
 [debug] used values : vfs=examples/vfs/sample.xml, script=demo.txt
-VFS loaded: sample (folders: 3, files: 4)
+VFS loaded: sample (folders: 3, files: 6)
 alice@workstation:/$ cd /home/user
 alice@workstation:/home/user$ ls
 data.bin
 docs/
 notes.txt
+report.txt
 alice@workstation:/home/user$ ls -l
 -        5 data.bin
 d        - docs/
 -        5 notes.txt
+-     1639 report.txt
+alice@workstation:/home/user$ ls -a
+./
+../
+.profile
+data.bin
+docs/
+notes.txt
+report.txt
+alice@workstation:/home/user$ ls -lh
+-        5 data.bin
+d        - docs/
+-        5 notes.txt
+-     1.6K report.txt
+alice@workstation:/home/user$ ls -lah
+d        - ./
+d        - ../
+-       18 .profile
+-        5 data.bin
+d        - docs/
+-        5 notes.txt
+-     1.6K report.txt
 alice@workstation:/home/user$ cd docs
 alice@workstation:/home/user/docs$ tac todo.txt
 send to teacher
@@ -400,6 +435,8 @@ alice@workstation:/home/user$ cd /nope
 cd: /nope: No such file or directory
 alice@workstation:/home/user$ ls /nope
 ls: cannot access '/nope': No such file or directory
+alice@workstation:/home/user$ ls -lx
+ls: invalid option -- 'x'
 alice@workstation:/home/user$ whoami
 alice
 alice@workstation:/home/user$ exit
@@ -409,18 +446,20 @@ alice@workstation:/home/user$ exit
 отладочные строки опущены:
 
 ```
-VFS loaded: sample (folders: 3, files: 4)
+VFS loaded: sample (folders: 3, files: 6)
 alice@workstation:/$ whoami
 alice
 alice@workstation:/$ vfs-info
-VFS: sample (folders: 3, files: 4)
+VFS: sample (folders: 3, files: 6)
 /
   home/
     user/
+      .profile (18 bytes)
       data.bin (5 bytes)
       docs/
         todo.txt (47 bytes)
       notes.txt (5 bytes)
+      report.txt (1639 bytes)
   readme.txt (10 bytes)
 alice@workstation:/$ ls
 home/
@@ -505,19 +544,21 @@ VFS error: invalid format in 'examples/vfs/bad_format.xml': unknown element <fol
 [debug] command line: vfs=examples/vfs/minimal.xml, script=examples/start_a.txt, config=examples/config_full.yaml
 [debug] config file : {'vfs': 'examples/vfs/sample.xml', 'script': 'examples/start_b.txt'}
 [debug] used values : vfs=examples/vfs/sample.xml, script=examples/start_b.txt
-VFS loaded: sample (folders: 3, files: 4)
+VFS loaded: sample (folders: 3, files: 6)
 alice@workstation:/$ # Start script B: an alternative script
 alice@workstation:/$ whoami
 alice
 alice@workstation:/$ vfs-info
-VFS: sample (folders: 3, files: 4)
+VFS: sample (folders: 3, files: 6)
 /
   home/
     user/
+      .profile (18 bytes)
       data.bin (5 bytes)
       docs/
         todo.txt (47 bytes)
       notes.txt (5 bytes)
+      report.txt (1639 bytes)
   readme.txt (10 bytes)
 alice@workstation:/$ exit
 ```

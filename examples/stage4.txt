@@ -14,12 +14,19 @@ ls .
 ls ..
 # ls -l shows the type and the size of every entry
 ls -l /home/user
+# ls -a also shows hidden names (they start with a dot), . and ..
+ls -a /home/user
+# ls -h together with -l shows the sizes in a readable form (K, M)
+ls -lh /home/user
+# the options can be combined in any order
+ls -lah /home/user
 # ls with a file name and with several paths
 ls readme.txt
 ls /home /home/user/docs
-# ls errors: no such path, unknown option
+# ls errors: no such path, unknown option, unknown letter in a group
 ls /nope
 ls -x
+ls -lx
 
 # cd changes the folder, the prompt shows the current path
 cd /home/user
